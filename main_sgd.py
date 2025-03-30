@@ -8,7 +8,7 @@ import wandb
 from tqdm import tqdm
 
 from models import get_model
-from utils import WarmUpLR, load_data, save_model
+from utils import WarmUpLR, load_data, save_model, set_seed
 
 print(torch.backends.mps.is_available()) #the MacOS is higher than 12.3+
 print(torch.backends.mps.is_built()) #MPS is activated
@@ -83,8 +83,10 @@ def train_with_sgd(args):
         "device": args.device,
         "lr": args.lr,
         "batch_size": args.batch_size,
-        "warm": args.warm
+        "warm": args.warm,
+        "seed": args.seed
     })
+    set_seed(args.seed)
     evaluate = evaluate_model_ce
     # evaluate = evaluate_model_acc
     train_loader, val_loader, test_loader, num_classes = load_data(args.dataset, args.batch_size)
@@ -147,5 +149,6 @@ if __name__ == "__main__":
     parser.add_argument("--warm", type=int, default=1)
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     train_with_sgd(args)

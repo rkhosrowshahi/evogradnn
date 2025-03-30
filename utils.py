@@ -1,5 +1,8 @@
+import random
+import numpy as np
 from models.resnets import ResNet18, ResNet34, ResNet50
 import torch, time, yaml, os
+from torch.utils.data import DataLoader, Subset
 import torch.nn as nn
 from torch.optim.lr_scheduler import _LRScheduler
 import torchvision
@@ -17,7 +20,7 @@ def load_model(name):
     """ Load saved model """
     return torch.load(f'{name}', map_location=torch.device('cpu'))
 
-def get_balanced_indices(dataset, num_classes):
+def get_balanced_indices(dataset, split_size=1000):
     """ Get balanced indices using sklearn's train_test_split
     Args:
         dataset: PyTorch dataset
@@ -35,7 +38,7 @@ def get_balanced_indices(dataset, num_classes):
     # Split indices with stratification
     train_idx, val_idx = train_test_split(
         indices,
-        test_size=1000,  # 10% validation
+        test_size=split_size,  # 10% validation
         stratify=all_labels,
         random_state=42,
         shuffle=True
@@ -66,14 +69,12 @@ def load_data(dataset, batch_size):
         ])
         
         train_dataset = torchvision.datasets.CIFAR100(root='./data', train=True, download=True, transform=transform_train)
-        # val_indices = torch.randperm(50000)[:1000]
-        # train_indices = torch.randperm(50000)[1000:]
-        val_indices, train_indices = get_balanced_indices(train_dataset, num_classes)
-        val_loader = torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, val_indices), batch_size=batch_size, shuffle=True)
-        train_loader = torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, train_indices), batch_size=batch_size, shuffle=True)
+        val_indices, train_indices = get_balanced_indices(train_dataset, split_size=1000)
+        val_loader = DataLoader(Subset(train_dataset, val_indices), batch_size=batch_size, shuffle=True)
+        train_loader = DataLoader(Subset(train_dataset, train_indices), batch_size=batch_size, shuffle=True)
 
         test_dataset = torchvision.datasets.CIFAR100(root='./data', train=False, download=True, transform=transform_test)
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     elif dataset == 'cifar10':
         num_classes = 10
@@ -92,29 +93,26 @@ def load_data(dataset, batch_size):
         ])
 
         train_dataset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
-        # val_indices = torch.randperm(50000)[:1000]
-        # train_indices = torch.randperm(50000)[1000:]
-        val_indices, train_indices = get_balanced_indices(train_dataset, num_classes)
-        val_loader = torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, val_indices), batch_size=batch_size, shuffle=True)
-        train_loader = torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, train_indices), batch_size=batch_size, shuffle=True)
+        val_indices, train_indices = get_balanced_indices(train_dataset, split_size=1000)
+        val_loader = DataLoader(Subset(train_dataset, val_indices), batch_size=batch_size, shuffle=True)
+        train_loader = DataLoader(Subset(train_dataset, train_indices), batch_size=batch_size, shuffle=True)
 
         test_dataset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     elif dataset == 'mnist':
         num_classes = 10
         transform = transforms.Compose([
+            # transforms.Grayscale(num_output_channels=1),
             transforms.ToTensor(),
             transforms.Normalize((0.1307,), (0.3081,))
         ])
         train_dataset = torchvision.datasets.MNIST(root='./data', train=True, download=True, transform=transform)
-        # val_indices = torch.randperm(60000)[:1000]
-        # train_indices = torch.randperm(60000)[1000:]
-        val_indices, train_indices = get_balanced_indices(train_dataset, num_classes)
-        val_loader = torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, val_indices), batch_size=batch_size, shuffle=True)
-        train_loader = torch.utils.data.DataLoader(torch.utils.data.Subset(train_dataset, train_indices), batch_size=batch_size, shuffle=True)
+        val_indices, train_indices = get_balanced_indices(train_dataset, split_size=1000)
+        val_loader = DataLoader(Subset(train_dataset, val_indices), batch_size=batch_size, shuffle=True)
+        train_loader = DataLoader(Subset(train_dataset, train_indices), batch_size=batch_size, shuffle=True)
 
         test_dataset = torchvision.datasets.MNIST(root='./data', train=False, download=True, transform=transform)
-        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     else:
         raise ValueError(f"Dataset {dataset} not supported")
     
@@ -142,3 +140,12 @@ class WarmUpLR(_LRScheduler):
             base_lr * self.last_epoch / (self.total_iters + 1e-8)
             for base_lr in self.base_lrs
         ]
+    
+def set_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False

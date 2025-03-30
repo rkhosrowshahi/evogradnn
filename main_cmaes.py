@@ -171,6 +171,7 @@ def build_model(model, W, total_weights, solution, codebook, cma, weight_offsets
     Returns:
         model: Updated model with new parameters
     """
+    solution = np.array(solution)
     means = solution[:W]
     log_sigmas = solution[W:]
     sigmas = np.exp(log_sigmas)
@@ -180,8 +181,7 @@ def build_model(model, W, total_weights, solution, codebook, cma, weight_offsets
     for k in range(W):
         indices = codebook[k]
         size = len(indices)
-        if size > 0:  # Handle empty components
-            # Convert JAX arrays to PyTorch tensors
+        if size > 0: 
             mean_tensor = torch.tensor(means[k], device=device)
             sigma_tensor = torch.tensor(sigmas[k], device=device)
             
