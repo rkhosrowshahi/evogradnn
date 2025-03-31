@@ -370,7 +370,7 @@ def main(args):
 
     state = solver.init(rng, population=np.zeros((popsize, D)), fitness=np.inf, params=es_params)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr_init, momentum=0.9, weight_decay=args.weight_decay)
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr_init, momentum=0.9, weight_decay=5e-4)
     criterion = torch.nn.CrossEntropyLoss()
     train_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=np.linspace(args.steps * 0.2, args.steps * 0.8, 3), gamma=0.2)
     # train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.steps)
@@ -421,7 +421,6 @@ def main(args):
                     weights = torch.nn.utils.parameters_to_vector(model.parameters()).detach().cpu().numpy()
                     penalty = args.weight_decay * compute_l2_norm(weights)
                     f = obj(model, batch, device, train=True) + penalty
-                    # f += penalty
                     init_fitness[i] = f # Minimize 
 
                 init_population[init_fitness.argmin()] = x0

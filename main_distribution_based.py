@@ -5,7 +5,7 @@ from sklearn.metrics import f1_score
 from tqdm import tqdm
 import numpy as np
 import torch
-from evosax.algorithms.distribution_based import CMA_ES, Sep_CMA_ES
+from evosax.algorithms.distribution_based import distribution_based_algorithms
 import wandb
 
 from utils import WarmUpLR, load_data, save_model, set_seed
@@ -150,16 +150,16 @@ def compute_l2_norm(x) -> np.ndarray:
     """
     return np.nanmean(x * x)
 
-def build_model(model, W, total_weights, solution, codebook, cma, weight_offsets, device='cuda'):
+def build_model(model, W, total_weights, solution, codebook, state, weight_offsets, device='cuda'):
     """
-    Build model using the solution parameters from CMA-ES
+    Build model using the solution parameters from distribution based strategy
     Args:
         model: Base neural network model
         W: Number of components
         total_weights: Total number of parameters
-        solution: Solution vector from CMA-ES
+        solution: Solution vector from distribution based strategy
         codebook: Dictionary mapping components to parameter indices
-        cma: CMA-ES state
+        state: Distribution based strategy state
         weight_offsets: Random offsets for parameters
         device: Device to place model on
     Returns:
@@ -291,16 +291,16 @@ def random_codebook_initialization(W_init, total_weights):
         weight_indices[indices] = np.full((len(indices), ), key)
     return codebook
 
-# CMA-ES Training Loop
+# Distribution based strategies Training Loop
 def main(args):
     """
-    Main training loop using CMA-ES
+    Main training loop using distribution based strategies
     Args:
         args: Command line arguments
     """
     set_seed(args.seed)
     # Initialize wandb logging
-    wandb.init(project=f"GF-CMA_ES-{args.net}-{args.dataset}", config={
+    wandb.init(project=f"GF-{args.strategy}-{args.net}-{args.dataset}", config={
         "W_init": args.w_init,
         "steps": args.steps,
         "popsize": args.popsize,
@@ -339,7 +339,7 @@ def main(args):
 
     # print(evaluate(model, train_loader, device, train=True))
     total_weights = sum(p.numel() for p in model.parameters())
-    initial_weights = torch.nn.utils.parameters_to_vector(model.parameters()).detach().cpu().numpy()
+    gd_params = torch.nn.utils.parameters_to_vector(model.parameters())
 
     codebook = {}
     # codebook = random_codebook_initialization(W_init, total_weights)
@@ -347,65 +347,77 @@ def main(args):
     weight_offsets = torch.normal(mean=0.0, std=1.0, size=(total_weights,), device=device)
 
     D = W_init * 2
-    # Initialize CMA-ES
+    # Initialize distribution based strategy
     rng = jax.random.PRNGKey(args.seed)
     x0 = np.concatenate([np.zeros(W_init), np.full(W_init, np.log(0.01))])
-    solver = CMA_ES(population_size=popsize, solution=x0)
+    solver = distribution_based_algorithms[args.strategy](population_size=popsize, solution=x0)
     es_params = solver.default_params
-    es_params = es_params.replace(std_init=args.sigma_init)
+    if args.strategy == 'CMA-ES':
+        es_params = es_params.replace(std_init=args.sigma_init)
+    elif args.strategy == 'Sep-CMA-ES':
+        es_params = es_params.replace(std_init=args.sigma_init)
+    elif args.strategy == 'PGPE':
+        es_params = es_params.replace(std_init=args.sigma_init,
+                                      std_lr=args.std_lr)
+    elif args.strategy == 'Simple-ES':
+        es_params = es_params.replace(std_init=args.sigma_init)
+        
     state = solver.init(rng, x0, es_params)
 
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr_init, momentum=0.9, weight_decay=args.weight_decay)
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr_init, momentum=0.9, weight_decay=5e-4)
     criterion = torch.nn.CrossEntropyLoss()
+    train_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=np.linspace(args.steps * 0.2, args.steps * 0.6, 3), gamma=0.2)
     # train_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 160], gamma=0.2)
-    train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.steps)
+    # train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.steps)
     iter_per_epoch = len(train_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
-    
+    val_accuracy = evaluate_model_acc(model, val_loader, device)
     total_fe = 0
     train_iter = itertools.cycle(train_loader)
     state_wandb = {}
-    pbar = tqdm(range(1, args.steps + 1), desc="Training with CMA-ES")
+    pbar = tqdm(range(1, args.steps + 1), desc=f"Training with {args.strategy}", disable=not args.verbose)
     for step in pbar:
         rng, rng_ask, rng_tell = jax.random.split(rng, 3)
         if step > args.warm:
             train_scheduler.step()
+        val_accuracy_after_sgd = 0
+        val_accuracy_after_ea = 0
         if step % args.gd_interval == 0 or step == 1:
-            # print("Before SGD fitness:", obj(model, batch, device, train=True))
-            val_before = evaluate_model_acc(model, val_loader, device)
+            val_accuracy_after_ea = evaluate_model_acc(model, val_loader, device)
+            if val_accuracy_after_ea < val_accuracy:
+                torch.nn.utils.vector_to_parameters((gd_params), model.parameters())
+
+            # print("Before SGD fitness:")
             gd_fe, gd_loss = train_on_gd(model, train_loader, optimizer, criterion, step=step, warmup_scheduler=warmup_scheduler, device=device)
-            # print("After SGD fitness:", obj(model, batch, device, train=True))
-            val_after = evaluate_model_acc(model, val_loader, device)
-            if val_after >= val_before:
-                gd_params = torch.nn.utils.parameters_to_vector(model.parameters()).detach().cpu().numpy()
-                codebook, centers, log_sigmas, assignment = ubp_cluster(W=W_init, params=gd_params)
+            # print("After SGD fitness:")
+            val_accuracy_after_sgd = evaluate_model_acc(model, val_loader, device)
+            if val_accuracy_after_sgd >= val_accuracy:
+                gd_params = torch.nn.utils.parameters_to_vector(model.parameters())
+                codebook, centers, log_sigmas, assignment = ubp_cluster(W=W_init, params=gd_params.detach().cpu().numpy())
                 W = len(centers)
                 D = W * 2
                 x0 = np.concatenate([centers, log_sigmas])
-                solver = CMA_ES(population_size=popsize, solution=x0)
+                solver = distribution_based_algorithms[args.strategy](population_size=popsize, solution=x0)
                 # es_params = solver.default_params
                 # es_params = es_params.replace(std_init=state.std.mean())
-                state = solver.init(rng, x0, es_params)
+                state = solver.init(rng, mean=x0, params=es_params)
             total_fe += gd_fe
-            # else:
-            #     model = build_model(model, D, total_weights, mu, codebook, state, weight_offsets)
-            #     print("SGD did not improve the validation accuracy, skipping CMA-ES update")
-        if step % args.eval_interval == 0 or step == 1:
-            val_accuracy = evaluate_model_acc(model, test_loader, device)
-            
+            if step % args.eval_interval == 0 or step == 1:
+                # val_accuracy_after_ea = evaluate_model_acc(model, val_loader, device)
+                val_accuracy = val_accuracy_after_sgd if val_accuracy_after_sgd > val_accuracy_after_ea else val_accuracy_after_ea
+    
         solutions, state = solver.ask(rng_ask, state, es_params)
         fitness_values = np.zeros(len(solutions))
         batch = next(train_iter)
         for i, solution in enumerate(solutions):
             model = build_model(model, W, total_weights, solution, codebook, state, weight_offsets)
             # Evaluate model
-            f = obj(model, batch, device, train=True)
             weights = torch.nn.utils.parameters_to_vector(model.parameters()).detach().cpu().numpy()
             penalty = args.weight_decay * compute_l2_norm(weights)
-            f += penalty
+            f = obj(model, batch, device, train=True) + penalty
             fitness_values[i] = f # Minimize 
         total_fe += popsize
-        # Update CMA-ES
+        # Update distribution based strategy
         state, metrics = solver.tell(rng_tell, solutions, fitness_values, state, es_params)
         mu = solver.get_mean(state)
         model = build_model(model, W, total_weights, mu, codebook, state, weight_offsets)
@@ -452,7 +464,7 @@ def parse_args():
     Returns:
         args: Parsed arguments
     """
-    parser = argparse.ArgumentParser(description='Train ResNet on CIFAR using CMA-ES')
+    parser = argparse.ArgumentParser(description='Train ResNet on CIFAR using distribution based strategies')
     
     # Training parameters
     parser.add_argument('--warm', type=int, default=1,
@@ -460,17 +472,19 @@ def parse_args():
     
     # Dataset parameters
     parser.add_argument('--dataset', type=str, default='cifar10', choices=['cifar10', 'cifar100', 'mnist'],
-                      help='Dataset to use (cifar10 or cifar100)')
+                      help='Dataset to use (cifar10 or cifar100 or mnist)')
     
-    # CMA-ES parameters
+    # Distribution based strategies parameters
+    parser.add_argument('--strategy', type=str, default='CMA_ES', choices=list(distribution_based_algorithms.keys()),
+                      help=f'Strategy to use {list(distribution_based_algorithms.keys())}')
     parser.add_argument('--w_init', type=int, default=256,
                       help='Codebook size (default: 2^8=256)')
     parser.add_argument('--steps', type=int, default=200,
-                      help='Number of steps for CMA-ES (default: 200)')
+                      help='Number of steps for distribution based strategy (default: 200)')
     parser.add_argument('--popsize', type=int, default=100,
-                      help='Population size for CMA-ES (default: 100)')
+                      help='Population size for distribution based strategy (default: 100)')
     parser.add_argument('--sigma_init', type=float, default=0.001,
-                      help='Sigma initialization for CMA-ES (default: 0.001)')
+                      help='Sigma initialization for distribution based strategy (default: 0.001)')
     parser.add_argument('--lr_init', type=float, default=0.1,
                       help='Learning rate for SGD (default: 0.1)')
     parser.add_argument('--weight_decay', type=float, default=0.001,
@@ -478,9 +492,9 @@ def parse_args():
     parser.add_argument('--lr_decay', type=float, default=0.9,
                       help='Learning rate decay for SGD (default: 0.9)')
     parser.add_argument('--eval_interval', type=int, default=10,
-                      help='Evaluation interval for CMA-ES (default: 100)')
+                      help='Evaluation interval for distribution based strategy (default: 100)')
     parser.add_argument('--gd_interval', type=int, default=10,
-                      help='Evaluation interval for CMA-ES (default: 100)')
+                      help='Evaluation interval for distribution based strategy (default: 100)')
     parser.add_argument('--objective', type=str, default='f1',
                       choices=['ce', 'acc', 'f1'],
                       help='Objective function to optimize (default: f1)')
@@ -497,6 +511,9 @@ def parse_args():
     parser.add_argument('--net', type=str, default='resnet18',
                       choices=['resnet18', 'resnet34', 'resnet50', 'mnist30k', 'mnist500k', 'mnist3m', 'cifar300k', 'cifar900k', 'cifar8m'],
                       help='ResNet model architecture')
+    
+    parser.add_argument('--verbose', default=False, action='store_true',
+                      help='Verbose output (default: False)')
 
     args = parser.parse_args()
     return args
