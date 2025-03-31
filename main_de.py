@@ -5,8 +5,8 @@ from sklearn.metrics import f1_score
 from tqdm import tqdm
 import numpy as np
 import torch
-from evosax.algorithms.distribution_based import CMA_ES, Sep_CMA_ES
 import wandb
+from evosax.algorithms.population_based import DiffusionEvolution, DifferentialEvolution
 
 from utils import WarmUpLR, load_data, save_model, set_seed
 from models import get_model
@@ -300,7 +300,7 @@ def main(args):
     """
     set_seed(args.seed)
     # Initialize wandb logging
-    wandb.init(project=f"GF-CMA_ES-{args.net}-{args.dataset}", config={
+    wandb.init(project=f"GF-DE-{args.net}-{args.dataset}", config={
         "W_init": args.w_init,
         "steps": args.steps,
         "popsize": args.popsize,
@@ -308,7 +308,6 @@ def main(args):
         "seed": args.seed,
         "batch_size": args.batch_size,
         "net": args.net,
-        "sigma_init": args.sigma_init,
         "lr_init": args.lr_init,
         "dataset": args.dataset,
         "weight_decay": args.weight_decay,
@@ -347,13 +346,10 @@ def main(args):
     weight_offsets = torch.normal(mean=0.0, std=1.0, size=(total_weights,), device=device)
 
     D = W_init * 2
-    # Initialize CMA-ES
     rng = jax.random.PRNGKey(args.seed)
-    x0 = np.concatenate([np.zeros(W_init), np.full(W_init, np.log(0.01))])
-    solver = CMA_ES(population_size=popsize, solution=x0)
+    solver = DiffusionEvolution(population_size=popsize, solution=np.zeros(D))  
     es_params = solver.default_params
-    es_params = es_params.replace(std_init=args.sigma_init)
-    state = solver.init(rng, x0, es_params)
+    state = solver.init(rng, population=np.zeros((popsize, D)), fitness=np.inf, params=es_params)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr_init, momentum=0.9, weight_decay=args.weight_decay)
     criterion = torch.nn.CrossEntropyLoss()
@@ -361,41 +357,49 @@ def main(args):
     train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.steps)
     iter_per_epoch = len(train_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
-    
+    val_accuracy = evaluate_model_acc(model, val_loader, device)
     total_fe = 0
     train_iter = itertools.cycle(train_loader)
     state_wandb = {}
-    pbar = tqdm(range(1, args.steps + 1), desc="Training with CMA-ES")
+    pbar = tqdm(range(1, args.steps + 1), desc="Training with DE", disable=not args.verbose)
     for step in pbar:
         rng, rng_ask, rng_tell = jax.random.split(rng, 3)
+        batch = next(train_iter)
         if step > args.warm:
             train_scheduler.step()
+        
+        val_accuracy_after_sgd = 0
         if step % args.gd_interval == 0 or step == 1:
-            # print("Before SGD fitness:", obj(model, batch, device, train=True))
-            val_before = evaluate_model_acc(model, val_loader, device)
+            # print("Before SGD fitness:")
             gd_fe, gd_loss = train_on_gd(model, train_loader, optimizer, criterion, step=step, warmup_scheduler=warmup_scheduler, device=device)
-            # print("After SGD fitness:", obj(model, batch, device, train=True))
-            val_after = evaluate_model_acc(model, val_loader, device)
-            if val_after >= val_before:
+            # print("After SGD fitness:")
+            val_accuracy_after_sgd = evaluate_model_acc(model, val_loader, device)
+            if val_accuracy_after_sgd >= val_accuracy:
                 gd_params = torch.nn.utils.parameters_to_vector(model.parameters()).detach().cpu().numpy()
                 codebook, centers, log_sigmas, assignment = ubp_cluster(W=W_init, params=gd_params)
                 W = len(centers)
                 D = W * 2
                 x0 = np.concatenate([centers, log_sigmas])
-                solver = CMA_ES(population_size=popsize, solution=x0)
-                # es_params = solver.default_params
-                # es_params = es_params.replace(std_init=state.std.mean())
-                state = solver.init(rng, x0, es_params)
+                solver = DiffusionEvolution(population_size=popsize, solution=x0)
+
+                init_population = np.zeros((popsize, D))
+                init_fitness = np.full(popsize, np.inf)
+                for i in range(popsize):
+                    for j in range(W):
+                        init_population[i][j] = np.random.uniform(centers[j] - log_sigmas[j], centers[j] + log_sigmas[j])
+                        init_population[i][j+W] = np.random.uniform(log_sigmas[j] - 0.1, log_sigmas[j] + 0.1)
+                    build_model(model, W, total_weights, init_population[i], codebook, state, weight_offsets)
+                    init_fitness[i] = obj(model, batch, device, train=True)
+
+                state = solver.init(rng, population=init_population, fitness=init_fitness, params=es_params)
             total_fe += gd_fe
-            # else:
-            #     model = build_model(model, D, total_weights, mu, codebook, state, weight_offsets)
-            #     print("SGD did not improve the validation accuracy, skipping CMA-ES update")
-        if step % args.eval_interval == 0 or step == 1:
-            val_accuracy = evaluate_model_acc(model, test_loader, device)
-            
+            if step % args.eval_interval == 0 or step == 1:
+                val_accuracy = evaluate_model_acc(model, val_loader, device)
+                val_accuracy = val_accuracy_after_sgd if val_accuracy_after_sgd > val_accuracy else val_accuracy
+    
         solutions, state = solver.ask(rng_ask, state, es_params)
         fitness_values = np.zeros(len(solutions))
-        batch = next(train_iter)
+
         for i, solution in enumerate(solutions):
             model = build_model(model, W, total_weights, solution, codebook, state, weight_offsets)
             # Evaluate model
@@ -405,20 +409,23 @@ def main(args):
             f += penalty
             fitness_values[i] = f # Minimize 
         total_fe += popsize
-        # Update CMA-ES
+        # Update DE
         state, metrics = solver.tell(rng_tell, solutions, fitness_values, state, es_params)
-        mu = solver.get_mean(state)
-        model = build_model(model, W, total_weights, mu, codebook, state, weight_offsets)
+
+        best_solution = solver.get_best_solution(state)
+        build_model(model, W, total_weights, best_solution, codebook, state, weight_offsets)
+        min_fitness = obj(model, batch, device, train=True)
+        
+        mu = solver.get_population(state).mean(axis=0)
+        build_model(model, W, total_weights, mu, codebook, state, weight_offsets)
         mean_fitness = obj(model, batch, device, train=True)
-        min_fitness = np.min(fitness_values)
-        average_fitness = np.mean(fitness_values)
+        average_fitness = state.fitness.mean()
         state_wandb = {
-                "test accuracy": val_accuracy,
+                "validation accuracy": val_accuracy,
                 "step": step,
                 "min fitness": min_fitness,
                 "mean fitness": mean_fitness,
                 "average fitness": average_fitness,
-                "sigma": np.mean(state.std),
                 "function evaluations": total_fe,
                 "LR": optimizer.param_groups[0]['lr'],
                 "D": D,
@@ -427,20 +434,17 @@ def main(args):
         wandb.log(state_wandb)
         # Logging
         pbar.set_postfix({"D": D, "fitness": f"{min_fitness:.4f}", "fe": total_fe})
-        # print(f"Step {step + 1}, D:{D}, Fitness: {np.min(fitness_values)}, sigma: {np.mean(state.std)}")
+        # print(f"Step {step + 1}, D:{D}, Fitness: {np.min(fitness_values)}")
 
-        if np.mean(state.std) == 0  or np.isnan(np.mean(state.std)):
-            print("sigma reached to 0, halting the optimization...")
-            break
 
-    mu = solver.get_mean(state)
+    mu = solver.get_population(state).mean(axis=0)
     model = build_model(model, W, total_weights, mu, codebook, state, weight_offsets)
     # Final Evaluation
     final_accuracy = evaluate_model_acc(model, test_loader, device)
 
     wandb.log({"final test accuracy": final_accuracy})
 
-    save_model(model, f"GF-CMA_ES-{args.net}-{args.dataset}-LR{args.lr_init}-W_init{args.w_init}-sigma_init{args.sigma_init}-batch_size{args.batch_size}-steps{args.steps}-warm{args.warm}", wandb)
+    save_model(model, f"GF-DE-{args.net}-{args.dataset}-LR{args.lr_init}-W_init{args.w_init}-batch_size{args.batch_size}-steps{args.steps}-warm{args.warm}", wandb)
 
     # Finish wandb run
     wandb.finish()
@@ -452,7 +456,7 @@ def parse_args():
     Returns:
         args: Parsed arguments
     """
-    parser = argparse.ArgumentParser(description='Train ResNet on CIFAR using CMA-ES')
+    parser = argparse.ArgumentParser(description='Train ResNet on CIFAR using DE')
     
     # Training parameters
     parser.add_argument('--warm', type=int, default=1,
@@ -462,15 +466,13 @@ def parse_args():
     parser.add_argument('--dataset', type=str, default='cifar10', choices=['cifar10', 'cifar100', 'mnist'],
                       help='Dataset to use (cifar10 or cifar100)')
     
-    # CMA-ES parameters
+    # DE parameters
     parser.add_argument('--w_init', type=int, default=256,
                       help='Codebook size (default: 2^8=256)')
     parser.add_argument('--steps', type=int, default=200,
-                      help='Number of steps for CMA-ES (default: 200)')
-    parser.add_argument('--popsize', type=int, default=100,
-                      help='Population size for CMA-ES (default: 100)')
-    parser.add_argument('--sigma_init', type=float, default=0.001,
-                      help='Sigma initialization for CMA-ES (default: 0.001)')
+                      help='Number of steps for DE (default: 200)')
+    parser.add_argument('--popsize', type=int, default=50,
+                      help='Population size for DE (default: 50)')
     parser.add_argument('--lr_init', type=float, default=0.1,
                       help='Learning rate for SGD (default: 0.1)')
     parser.add_argument('--weight_decay', type=float, default=0.001,
@@ -478,9 +480,9 @@ def parse_args():
     parser.add_argument('--lr_decay', type=float, default=0.9,
                       help='Learning rate decay for SGD (default: 0.9)')
     parser.add_argument('--eval_interval', type=int, default=10,
-                      help='Evaluation interval for CMA-ES (default: 100)')
+                      help='Evaluation interval for DE (default: 10)')
     parser.add_argument('--gd_interval', type=int, default=10,
-                      help='Evaluation interval for CMA-ES (default: 100)')
+                      help='Evaluation interval for DE (default: 10)')
     parser.add_argument('--objective', type=str, default='f1',
                       choices=['ce', 'acc', 'f1'],
                       help='Objective function to optimize (default: f1)')
@@ -497,6 +499,9 @@ def parse_args():
     parser.add_argument('--net', type=str, default='resnet18',
                       choices=['resnet18', 'resnet34', 'resnet50', 'mnist30k', 'mnist500k', 'mnist3m', 'cifar300k', 'cifar900k', 'cifar8m'],
                       help='ResNet model architecture')
+    parser.add_argument('--verbose', default=False, action='store_true',
+                      help='Verbose output (default: False)')
+
 
     args = parser.parse_args()
     return args
