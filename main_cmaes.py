@@ -439,7 +439,7 @@ def main(args):
             break
 
     mu = solver.get_mean(state)
-    model = build_model(model, D, total_weights, mu, codebook, state, weight_offsets)
+    model = build_model(model, W, total_weights, mu, codebook, state, weight_offsets)
     # Final Evaluation
     final_accuracy = evaluate_model_acc(model, test_loader, device)
     print(f"Final Test Accuracy: {final_accuracy}%")
