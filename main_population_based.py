@@ -365,14 +365,15 @@ def main(args):
         es_params = es_params.replace(std_init=0.1)
     elif args.strategy == 'LearnedGA':
         es_params = es_params.replace(std_init=0.1)
-        
+    elif args.strategy == 'PSO':
+        es_params = es_params.replace(inertia_coeff=0.7, cognitive_coeff=1.5, social_coeff=1.5)
 
     state = solver.init(rng, population=np.zeros((popsize, D)), fitness=np.inf, params=es_params)
 
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr_init, momentum=0.9, weight_decay=args.weight_decay)
     criterion = torch.nn.CrossEntropyLoss()
-    # train_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[60, 120, 160], gamma=0.2)
-    train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.steps)
+    train_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=np.linspace(args.steps * 0.2, args.steps * 0.8, 3), gamma=0.2)
+    # train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.steps)
     iter_per_epoch = len(train_loader)
     warmup_scheduler = WarmUpLR(optimizer, iter_per_epoch * args.warm)
     val_accuracy = evaluate_model_acc(model, val_loader, device)
