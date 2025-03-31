@@ -442,8 +442,8 @@ def main(args):
     model = build_model(model, W, total_weights, mu, codebook, state, weight_offsets)
     # Final Evaluation
     final_accuracy = evaluate_model_acc(model, test_loader, device)
-    print(f"Final Test Accuracy: {final_accuracy}%")
-    wandb.log({"final_test_accuracy": final_accuracy})
+
+    wandb.log({"final test accuracy": final_accuracy})
 
     save_model(model, f"GF-CMA_ES-{args.net}-{args.dataset}-LR{args.lr_init}-W_init{args.w_init}-sigma_init{args.sigma_init}-batch_size{args.batch_size}-steps{args.steps}-warm{args.warm}", wandb)
 
@@ -502,17 +502,10 @@ def parse_args():
     parser.add_argument('--net', type=str, default='resnet18',
                       choices=['resnet18', 'resnet34', 'resnet50', 'mnist30k', 'mnist500k', 'mnist3m', 'cifar300k', 'cifar900k', 'cifar8m'],
                       help='ResNet model architecture')
-    
-    # Logging parameters
-    # parser.add_argument('--wandb_project', type=str, default='resnet-cmaes',
-    #                   help='Weights & Biases project name')
-    # parser.add_argument('--wandb_entity', type=str, default=None,
-    #                   help='Weights & Biases entity name')
-    
+
     args = parser.parse_args()
     return args
 
 if __name__ == '__main__':
     args = parse_args()
     main(args)
-# train_with_cma_es(W=int(2 ** 8), generations=10000, population_size=20, device='cuda')
