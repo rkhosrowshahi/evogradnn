@@ -390,8 +390,8 @@ def main(args):
                 D = W * 2
                 x0 = np.concatenate([centers, log_sigmas])
                 solver = CMA_ES(population_size=popsize, solution=x0)
-                es_params = solver.default_params
-                es_params = es_params.replace(std_init=state.std.mean())
+                # es_params = solver.default_params
+                # es_params = es_params.replace(std_init=state.std.mean())
                 state = solver.init(rng, x0, es_params)
             total_fe += gd_fe
             # else:
