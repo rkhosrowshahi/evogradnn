@@ -1,10 +1,12 @@
+import torch.nn as nn
 # Import CIFAR10 model variants
 from .CIFAR10 import CIFAR300K, CIFAR900K, CIFAR8M
 # Import MNIST model variants
-from .MNIST import MNIST30K, MNIST500K, MNIST3M
+from .MNIST import MNIST30K, MNIST500K, MNIST3M, LeNet
 # Import ResNet architectures
 # from .resnets import ResNet18, ResNet34, ResNet50
-from .resnet import resnet18, resnet34, resnet50, resnet101, resnet152
+from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
+from .resnet import resnet20, resnet32, resnet56
 
 def get_model(model_name, num_classes, device='cuda'):
     """
@@ -18,33 +20,45 @@ def get_model(model_name, num_classes, device='cuda'):
     """
     # ResNet model variants
     if model_name == 'resnet18':
-        model = resnet18(num_classes=num_classes).to(device)
+        model = resnet18(num_classes=num_classes) # For imagenet, [2, 2, 2, 2]
     elif model_name == 'resnet34':
-        model = resnet34(num_classes=num_classes).to(device)
+        model = resnet34(num_classes=num_classes) # For imagenet, [3, 4, 6, 3]
     elif model_name == 'resnet50':
-        model = resnet50(num_classes=num_classes).to(device)
+        model = resnet50(num_classes=num_classes) # For imagenet, [3, 4, 6, 3]
     elif model_name == 'resnet101':
-        model = resnet101(num_classes=num_classes).to(device)
+        model = resnet101(num_classes=num_classes) # For imagenet, [3, 4, 23, 3]
     elif model_name == 'resnet152':
-        model = resnet152(num_classes=num_classes).to(device)
+        model = resnet152(num_classes=num_classes) # For imagenet, [3, 8, 36, 3]
+    elif model_name == 'resnet20':
+        model = resnet20(num_classes=num_classes) # For CIFARs, [3, 3, 3]
+    elif model_name == 'resnet32':
+        model = resnet32(num_classes=num_classes) # For CIFARs, [5, 5, 5]
+    elif model_name == 'resnet56':
+        model = resnet56(num_classes=num_classes) # For CIFARs, [7, 7, 7]
     # CIFAR10 model variants
     elif model_name == 'cifar300k':
-        model = CIFAR300K().to(device)
+        model = CIFAR300K()
     elif model_name == 'cifar900k':
-        model = CIFAR900K().to(device)
+        model = CIFAR900K()
     elif model_name == 'cifar8m':
-        model = CIFAR8M().to(device)
+        model = CIFAR8M()
     # MNIST model variants
     elif model_name == 'mnist30k':
-        model = MNIST30K().to(device)
+        model = MNIST30K()
     elif model_name == 'mnist500k':
-        model = MNIST500K().to(device)
+        model = MNIST500K()
     elif model_name == 'mnist3m':
-        model = MNIST3M().to(device)
+        model = MNIST3M()
+    elif model_name == 'lenet':
+        model = LeNet()
     else:
         raise ValueError(f"Model {model_name} not supported")
     
-    return model
+    if model_name in ['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152']:
+        model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        model.maxpool = nn.Identity()
+    
+    return model.to(device)
 
 # List of all available models for export
-__all__ = ["CIFAR300K", "CIFAR900K", "CIFAR8M", "MNIST30K", "MNIST500K", "MNIST3M", "ResNet18", "ResNet34", "ResNet50"]
+__all__ = ["CIFAR300K", "CIFAR900K", "CIFAR8M", "MNIST30K", "MNIST500K", "MNIST3M", "ResNet18", "ResNet34", "ResNet50", "ResNet101", "ResNet152", "ResNet20", "ResNet32", "ResNet56"]

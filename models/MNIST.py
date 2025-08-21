@@ -114,3 +114,40 @@ class MNIST3M(nn.Module):
         data = self.out2(data)
 
         return data
+    
+
+class LeNet(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        # First conv layer: 1 input channel, 6 output channels, 5x5 kernel
+        self.conv1 = nn.Conv2d(1, 6, kernel_size=5)
+        # Second conv layer: 6 input channels, 16 output channels, 5x5 kernel  
+        self.conv2 = nn.Conv2d(6, 16, kernel_size=5)
+        # First fully connected layer
+        self.fc1 = nn.Linear(16 * 4 * 4, 120)
+        # Second fully connected layer
+        self.fc2 = nn.Linear(120, 84)
+        # Output layer
+        self.fc3 = nn.Linear(84, 10)
+        # Activation function
+        self.act = nn.ReLU()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # First conv block
+        x = self.act(self.conv1(x))
+        x = nn.functional.max_pool2d(x, 2)
+        
+        # Second conv block
+        x = self.act(self.conv2(x))
+        x = nn.functional.max_pool2d(x, 2)
+        
+        # Flatten
+        x = x.view(x.size(0), -1)
+        
+        # Fully connected layers
+        x = self.act(self.fc1(x))
+        x = self.act(self.fc2(x))
+        x = self.fc3(x)
+        
+        return x
+
