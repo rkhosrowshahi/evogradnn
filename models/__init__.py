@@ -8,7 +8,7 @@ from .MNIST import MNIST30K, MNIST500K, MNIST3M, LeNet
 from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
 from .resnet import resnet20, resnet32, resnet56
 
-def get_model(model_name, num_classes, device='cuda'):
+def get_model(model_name, num_classes, input_size: int = 32, device='cuda'):
     """
     Factory function to create and return a model based on the specified name.
     Args:
@@ -37,27 +37,36 @@ def get_model(model_name, num_classes, device='cuda'):
         model = resnet56(num_classes=num_classes) # For CIFARs, [7, 7, 7]
     # CIFAR10 model variants
     elif model_name == 'cifar300k':
-        model = CIFAR300K()
+        model = CIFAR300K() # For CIFARs
     elif model_name == 'cifar900k':
-        model = CIFAR900K()
+        model = CIFAR900K() # For CIFARs
     elif model_name == 'cifar8m':
-        model = CIFAR8M()
+        model = CIFAR8M() # For CIFARs
     # MNIST model variants
     elif model_name == 'mnist30k':
-        model = MNIST30K()
+        model = MNIST30K() # For MNISTs
     elif model_name == 'mnist500k':
-        model = MNIST500K()
+        model = MNIST500K() # For MNISTs
     elif model_name == 'mnist3m':
-        model = MNIST3M()
+        model = MNIST3M() # For MNISTs
     elif model_name == 'lenet':
-        model = LeNet()
+        model = LeNet() # For MNISTs
     else:
         raise ValueError(f"Model {model_name} not supported")
     
     if model_name in ['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152']:
         model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
         model.maxpool = nn.Identity()
-    
+        if input_size == 32:
+        # Modify first conv layer for CIFAR (32x32) instead of ImageNet (224x224)
+        # ResNet32 is already optimized for CIFAR, so no modification needed
+            if model_name in ['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152']:
+                model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+                model.maxpool = nn.Identity()  # Remove maxpool for CIFAR
+                # Modify final layer for number of classes
+                model.fc = nn.Linear(model.fc.in_features, num_classes)
+        else:
+            raise ValueError(f'Unsupported input size: {input_size}, only 32 or 224 are supported')
     return model.to(device)
 
 # List of all available models for export

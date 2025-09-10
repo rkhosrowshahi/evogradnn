@@ -176,7 +176,7 @@ def main(args):
     print(f"Starting training with arguments: {args}")
     
     # Load data and model
-    train_dataset, val_dataset, test_dataset, num_classes = get_dataset(args.dataset, validation_split=0.01)
+    train_dataset, val_dataset, test_dataset, num_classes, input_size = get_dataset(args.dataset, validation_split=0.01)
     # train_dataset = create_balanced_dataset(train_dataset, num_classes=num_classes, samples_per_class=103)
     batch_size = args.batch_size
     # Create data loaders
@@ -199,7 +199,7 @@ def main(args):
         shuffle=False,
         pin_memory=True,
     )
-    model = get_model(args.arch, num_classes, device)
+    model = get_model(model_name=args.arch, input_size=input_size, num_classes=num_classes, device=device)
     base_theta = params_to_vector(model.parameters(), to_numpy=True)
     num_weights = len(base_theta)
     

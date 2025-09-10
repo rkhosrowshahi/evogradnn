@@ -181,6 +181,7 @@ def get_dataset(dataset: str, validation_split: float = 0.1) -> Tuple[DataLoader
             transforms.Normalize(*stats)
         ])
         dataset_class = torchvision.datasets.CIFAR100
+        input_size = 32
         
     elif dataset == 'cifar10':
         num_classes = 10
@@ -197,7 +198,7 @@ def get_dataset(dataset: str, validation_split: float = 0.1) -> Tuple[DataLoader
             transforms.Normalize(*stats)
         ])
         dataset_class = torchvision.datasets.CIFAR10
-        
+        input_size = 32
     elif dataset == 'mnist':
         num_classes = 10
         transform = transforms.Compose([
@@ -206,7 +207,7 @@ def get_dataset(dataset: str, validation_split: float = 0.1) -> Tuple[DataLoader
         ])
         dataset_class = torchvision.datasets.MNIST
         transform_train = transform_test = transform
-        
+        input_size = 28
     elif dataset == 'fashion':
         num_classes = 10
         transform = transforms.Compose([
@@ -215,6 +216,7 @@ def get_dataset(dataset: str, validation_split: float = 0.1) -> Tuple[DataLoader
         ])
         dataset_class = torchvision.datasets.FashionMNIST
         transform_train = transform_test = transform
+        input_size = 28
     else:
         raise ValueError(f"Dataset {dataset} not supported")
 
@@ -229,7 +231,7 @@ def get_dataset(dataset: str, validation_split: float = 0.1) -> Tuple[DataLoader
     val_dataset = Subset(train_dataset, val_indices)
     train_dataset = Subset(train_dataset, train_indices)
     
-    return train_dataset, val_dataset, test_dataset, num_classes
+    return train_dataset, val_dataset, test_dataset, num_classes, input_size
 
 def create_balanced_dataset(dataset, num_classes: int, samples_per_class: int = None) -> Subset:
     """Create a balanced dataset with equal samples per class.
