@@ -53,64 +53,44 @@ def log_metrics(metrics_dict: dict, step: int = None) -> None:
     if wandb.run is not None:
         wandb.log(metrics_dict, step=step)
 
-def log_training_metrics(epoch: int, train_loss: float, train_top1: float, 
-                        test_loss: float, test_top1: float, 
-                        additional_metrics: dict = None) -> None:
+def log_evaluation_metrics(epoch: int, metrics: dict = None) -> None:
     """Log training and testing metrics to W&B.
     
     Args:
         epoch: Current epoch number
-        train_loss: Training loss value
-        train_top1: Training top-1 accuracy
-        test_loss: Test loss value
-        test_top1: Test top-1 accuracy
-        additional_metrics: Optional dictionary of additional metrics
+        metrics: Dictionary of metric names and values
+        metrics: Optional dictionary of additional metrics
     """
-    metrics = {
-        'epoch': epoch,
-        'Train/loss': train_loss,
-        'Train/top1': train_top1,
-        'Test/loss': test_loss,
-        'Test/top1': test_top1,
+    log_dict = {
+        'Epoch': epoch,
     }
     
-    if additional_metrics:
-        metrics.update(additional_metrics)
+    if metrics:
+        log_dict.update(metrics)
     
-    log_metrics(metrics)
+    log_metrics(log_dict)
 
-def log_evolution_metrics(epoch: int, iteration: int, best_fitness: float,
-                         avg_pop_fitness: float, mean_fitness: float,
-                         best_solution_norm: float, test_top1: float, test_loss: float, additional_metrics: dict = None) -> None:
+def log_evolution_metrics(epoch: int, batch: int, metrics: dict = None) -> None:
     """Log evolution algorithm metrics to W&B.
     
     Args:
         epoch: Current epoch number
-        iteration: Current iteration number
-        best_fitness: Best fitness overall
-        best_fitness_in_generation: Best fitness in current generation
-        avg_fitness: Average fitness in current generation
-        best_solution_norm: Norm of the best solution
-        additional_metrics: Optional dictionary of additional metrics
+        metrics: Optional dictionary of additional metrics
     """
-    metrics = {
-        'epoch': epoch,
-        'iteration': iteration,
-        'Evolution/best_fitness': best_fitness,
-        'Evolution/avg_pop_fitness': avg_pop_fitness,
-        'Evolution/mean_fitness': mean_fitness,
-        'Evolution/best_solution_norm': best_solution_norm,
-        'Evolution/test_top1': test_top1,
-        'Evolution/test_loss': test_loss,
+    log_dict = {
+        'Epoch': epoch,
+        'Batch': batch,
     }
     
-    if additional_metrics:
-        metrics.update(additional_metrics)
+    if metrics:
+        log_dict.update(metrics)
     
-    log_metrics(metrics)
+    log_metrics(log_dict)
 
-def finish_wandb_run() -> None:
+def finish_wandb_run(log_dict: dict = None) -> None:
     """Finish the current W&B run."""
+    if log_dict is not None:
+        wandb.log(log_dict)
     if wandb.run is not None:
         wandb.finish()
 
@@ -711,6 +691,30 @@ def random_codebook_initialization(W_init: int, total_weights: int) -> Dict[int,
 
 # --------------------- Utility Classes ---------------------
 
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self, name, fmt=':f'):
+        self.name = name
+        self.fmt = fmt
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+    def __str__(self):
+        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+        return fmtstr.format(**self.__dict__)
+
 class Logger:
     """Custom logger that writes to both terminal and file."""
     
@@ -922,12 +926,12 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
         lr_schedule = optax.cosine_decay_schedule(
             init_value=1e-3,
             decay_steps=steps,
-            alpha=1e-4,
+            alpha=1e-2,
         )
         std_schedule = optax.cosine_decay_schedule(
             init_value=args.std,
             decay_steps=steps,
-            alpha=1e-4,
+            alpha=1e-2,
         )
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 

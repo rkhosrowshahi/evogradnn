@@ -6,6 +6,8 @@ from scipy.fft import irfft, fft
 import torch
 import torch.nn as nn
 
+from utils import params_to_vector
+
 
 
 class ParameterSharing:
@@ -20,16 +22,12 @@ class ParameterSharing:
             device: Device for PyTorch computations.
             seed: Random seed for reproducibility.
         """
-        self.model = model
-        self.criterion = criterion
-        self.init_params = torch.nn.utils.parameters_to_vector(self.model.parameters())
-        self.D = len(self.init_params)
-        self.d = d
         self.device = device
-        
-        # Set random seed
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        self.model = model
+        self.base_theta = params_to_vector(self.model.parameters())
+        self.D = len(self.base_theta)
+        self.d = d
+        self.criterion = criterion
 
         self.assignments = np.random.randint(0, self.d, (self.D,))
 
@@ -37,6 +35,14 @@ class ParameterSharing:
 
     def init_x0(self):
         return np.zeros(self.d)
+
+    def set_model(self, model):
+        self.model = model
+        self.base_theta = params_to_vector(self.model.parameters())
+        self.D = len(self.base_theta)
+
+    def set_theta(self, theta):
+        self.base_theta = theta
 
     def expand(self, z):
         """
@@ -139,7 +145,9 @@ class PerceptronSoftSharing(ParameterSharing):
     def __init__(self, model, criterion, d, device='cuda', seed=42):
         super().__init__(model, criterion, d, device, seed)
 
-        self.decoder = nn.Linear(self.d, self.D)
+        self.decoder = nn.Linear(self.d, self.D, bias=False)
+        nn.init.normal_(self.decoder.weight, mean=0.0, std=np.sqrt(1/self.d))
+
         self.decoder.to(self.device)
         print("Decoder parameters number:", sum(p.numel() for p in self.decoder.parameters()))
 
@@ -149,40 +157,52 @@ class PerceptronSoftSharing(ParameterSharing):
         z = z.to(self.device)
         with torch.no_grad():
             x = self.decoder(z)
+        x = self.base_theta + x
         return x
             
 
 class MLPSoftSharing(ParameterSharing):
-    def __init__(self, model, criterion, d, hidden_dims: list[int] = [32, 2], device='cuda', seed=42):
+    def __init__(self, model, criterion, d, hidden_dims: list[int] = [32, 16], use_activation: bool = True, activation: str = 'relu', device='cuda', seed=42):
         super().__init__(model, criterion, d, device, seed)
 
         self.hidden_dims = hidden_dims
-        # self.activation = nn.Tanh()
-        # self.activation = nn.ReLU()
-        self.activation = nn.GELU()
+        if activation == 'relu':
+            self.activation = nn.ReLU()
+        elif activation == 'tanh':
+            self.activation = nn.Tanh()
+        elif activation == 'gelu':
+            self.activation = nn.GELU()
+        elif activation == 'leaky_relu':
+            self.activation = nn.LeakyReLU()
+        else:
+            raise ValueError(f"Activation function {activation} not supported")
 
         layers = []
         # First layer: input to first hidden
-        layers.append(nn.Linear(self.d, hidden_dims[0]))
-        layers.append(self.activation)
-        # layers.append(nn.LayerNorm(hidden_dims[0]))
+        layers.append(nn.Linear(self.d, hidden_dims[0], bias=False))
+        if use_activation:
+            layers.append(self.activation)
         
         # Intermediate hidden layers
         for i in range(len(hidden_dims) - 1):
-            layers.append(nn.Linear(hidden_dims[i], hidden_dims[i + 1]))
-            layers.append(self.activation)
-            # layers.append(nn.LayerNorm(hidden_dims[i + 1]))
+            layers.append(nn.Linear(hidden_dims[i], hidden_dims[i + 1], bias=False))
+            if use_activation:
+                layers.append(self.activation)
         
         # Final layer: last hidden to output (no activation, as parameters can be any real values)
-        layers.append(nn.Linear(hidden_dims[-1], self.D))
-        # layers.append(nn.LayerNorm(self.D))
+        layers.append(nn.Linear(hidden_dims[-1], self.D, bias=False))
         
         self.decoder = nn.Sequential(*layers)
         self.decoder.to(self.device)
-        # # Initialize LayerNorm scale to 0.1 for small L2 norm
-        # nn.init.constant_(self.decoder[-1].weight, 0.1)  # γ = 0.1
-        # nn.init.constant_(self.decoder[-1].bias, 0.0)   # β = 0
+        self.init_decoder()
         print("Decoder parameters number:", sum(p.numel() for p in self.decoder.parameters()))
+
+    def init_decoder(self):
+        for layer in self.decoder.parameters():
+            if isinstance(layer, nn.Linear):
+                size = layer.weight.size(0)
+                std = np.sqrt(1/size)
+                nn.init.normal_(layer.weight, mean=0.0, std=std)
 
     def expand(self, z):
         if not isinstance(z, torch.Tensor):
@@ -190,6 +210,8 @@ class MLPSoftSharing(ParameterSharing):
         z = z.to(self.device)
         with torch.no_grad():
             x = self.decoder(z)
+
+        x = self.base_theta + x
         return x
     
 class HyperNetworkSoftSharing(ParameterSharing):
