@@ -889,13 +889,15 @@ def unfreeze_bn(model: nn.Module) -> None:
 
 
 def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0: np.ndarray, steps: int, args: argparse.Namespace) -> None:
+    std_init = args.es_std
+            
     if strategy == 'CMA_ES':
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
             solution=x0,
         )
         es_params = es.default_params.replace(
-            std_init=args.std,
+            std_init=std_init,
             std_min=1e-6, 
             std_max=1e1
         )
@@ -906,8 +908,8 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             num_populations=5,
             solution=x0,
         )
-        es_params = es.default_params.replace(std_init=args.std, std_min=1e-6, std_max=1e1)
-        means = np.random.normal(x0, args.std, (5, x0.shape[0]))
+        es_params = es.default_params.replace(std_init=std_init, std_min=1e-6, std_max=1e1)
+        means = np.random.normal(x0, std_init, (5, x0.shape[0]))
         es_state = es.init(key=key, means=means, params=es_params)
     elif strategy == 'SimpleES':
         lr_schedule = optax.exponential_decay(
@@ -921,7 +923,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             optimizer=optax.sgd(learning_rate=lr_schedule),
         )
         es_params = es.default_params.replace(
-            std_init=args.std,
+            std_init=std_init,
         )
         es_state = es.init(key=key, mean=x0, params=es_params)
     elif strategy == 'Open_ES':
@@ -931,7 +933,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             alpha=1e-2,
         )
         std_schedule = optax.cosine_decay_schedule(
-            init_value=args.std,
+            init_value=std_init,
             decay_steps=steps,
             alpha=1e-2,
         )
@@ -951,7 +953,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             decay_rate=0.2,
         )
         std_schedule = optax.cosine_decay_schedule(
-            init_value=args.std,
+            init_value=std_init,
             decay_steps=steps * args.epochs,
             alpha=1e-4,
         )
@@ -978,7 +980,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
         )
         es_params = es.default_params
         es_params = es_params.replace(
-            std_init=args.std,
+            std_init=std_init,
         )
         es_state = es.init(key=key, mean=x0, params=es_params)
     return es, es_params, es_state

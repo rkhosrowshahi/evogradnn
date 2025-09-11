@@ -17,17 +17,40 @@ import wandb
 def evaluate_model_on_batch(model, criterion, batch, device):
     model.eval()
     model = model.to(device)
-    with torch.no_grad():
-        inputs, targets = batch[0].to(device), batch[1].to(device)
-        output = model(inputs)
-        loss = criterion(output, targets)
-    return loss.item()
+    try:
+        with torch.no_grad():
+            inputs, targets = batch[0].to(device), batch[1].to(device)
+            output = model(inputs)
+            loss = criterion(output, targets)
+        return loss.item()
+    except RuntimeError as e:
+        if "CUDA" in str(e):
+            # Clear CUDA cache and retry
+            torch.cuda.empty_cache()
+            print(f"CUDA error encountered, cleared cache: {e}")
+            return 1e6  # Return high loss value as fallback
+        else:
+            raise e
 
 def load_solution_to_model(solution, ws, device):
-    x = ws.expand(solution)
-    theta = ws.process(x)
-    theta = theta.to(device)
-    ws.load_to_model(theta)
+    try:
+        x = ws.expand(solution)
+        theta = ws.process(x)
+        if torch.cuda.is_available() and device == 'cuda':
+            theta = theta.to(device)
+        ws.load_to_model(theta)
+    except RuntimeError as e:
+        if "CUDA" in str(e):
+            torch.cuda.empty_cache()
+            print(f"CUDA error in load_solution_to_model, cleared cache: {e}")
+            # Retry once with cache cleared
+            x = ws.expand(solution)
+            theta = ws.process(x)
+            if torch.cuda.is_available() and device == 'cuda':
+                theta = theta.to(device)
+            ws.load_to_model(theta)
+        else:
+            raise e
 
 
 def evaluate_solution_on_batch(solution, ws, batch, weight_decay=0, device='cuda'):
@@ -42,11 +65,25 @@ def evaluate_solution_on_batch(solution, ws, batch, weight_decay=0, device='cuda
 def evaluate_population_on_batch(population, ws, batch, weight_decay=0, device='cuda'):
     fitnesses = np.zeros(len(population))
     for i, z in enumerate(population):
-        load_solution_to_model(z, ws, device)
-        fitnesses[i] = evaluate_model_on_batch(model=ws.model, criterion=ws.criterion, batch=batch, device=device)
-        theta = params_to_vector(ws.model.parameters(), to_numpy=True)
-        theta_norm = np.linalg.norm(theta)
-        fitnesses[i] = fitnesses[i] + weight_decay * theta_norm
+        try:
+            load_solution_to_model(z, ws, device)
+            fitnesses[i] = evaluate_model_on_batch(model=ws.model, criterion=ws.criterion, batch=batch, device=device)
+            theta = params_to_vector(ws.model.parameters(), to_numpy=True)
+            theta_norm = np.linalg.norm(theta)
+            fitnesses[i] = fitnesses[i] + weight_decay * theta_norm
+        except RuntimeError as e:
+            if "CUDA" in str(e):
+                # Clear CUDA cache and assign high fitness value
+                torch.cuda.empty_cache()
+                print(f"CUDA error in population evaluation {i}, cleared cache: {e}")
+                fitnesses[i] = 1e6  # High fitness value (bad for minimization)
+            else:
+                raise e
+        
+        # Clear cache periodically to prevent memory buildup
+        if (i + 1) % 10 == 0:
+            torch.cuda.empty_cache()
+    
     return fitnesses
 
 
@@ -58,8 +95,6 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
     train_loader_iterator = itertools.cycle(train_loader)
     num_batches = len(train_loader)
     period = num_batches // 10
-    
-    v = es.get_mean(state=es_state)
 
     mean_loss_meter = AverageMeter(name='mean_loss', fmt=':.4e')
     pop_best_loss_meter = AverageMeter(name='pop_best_loss', fmt=':.4e')
@@ -69,8 +104,6 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
 
     for count_batch in range(1, num_batches+1):
         batch = next(train_loader_iterator)
-
-        es_state = es.init(key=key, mean=v, params=es_params)
 
         z0 = es.get_mean(state=es_state)
 
@@ -84,6 +117,10 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
 
             # Update ES
             es_state, metrics = es.tell(key=key_tell, population=solutions, fitness=fitnesses, state=es_state, params=es_params)
+            
+            # Clear CUDA cache periodically to prevent memory buildup
+            if count_iter % 4 == 0:
+                torch.cuda.empty_cache()
 
             # Apply mean solution
             mean_z = es.get_mean(state=es_state)
@@ -97,11 +134,10 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
             mean_norm_meter = mean_z_norm
         
         # Extract signal from ES exploration, apply momentum accumulation
-        mean_z = es.get_mean(state=es_state)
+        zt = es.get_mean(state=es_state)
 
         # Log to wandb
-        if (count_batch - 1) % period == 0:
-            # Load momentum-accumulated solution
+        if (count_batch - 1) % period == 0 or count_batch == num_batches or count_batch == 1 or count_batch == 0:
             load_solution_to_model(z0, ws, device)
             theta_z0 = params_to_vector(ws.model.parameters(), to_numpy=True)
             theta_z0_norm = np.linalg.norm(theta_z0)
@@ -111,43 +147,10 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
                                                                 device=device, 
                                                                 train=False)
 
-            load_solution_to_model(mean_z, ws, device)
-            theta_mean = params_to_vector(ws.model.parameters(), to_numpy=True)
-            theta_mean_norm = np.linalg.norm(theta_mean)
-            theta_mean_test_loss, theta_mean_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
-                                                                data_loader=val_loader, 
-                                                                device=device, 
-                                                                train=False)
-
-            load_solution_to_model(np.zeros(ws.d), ws, device)
-            theta_base_test_loss, theta_base_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
-                                                                data_loader=val_loader, 
-                                                                device=device, 
-                                                                train=False)
-    
-        # Update base theta with momentum-accumulated solution
-        # Load mean z to model
-        # load_solution_to_model(mean_z, ws, device)
-        # Get theta of mean z
-        # theta_mean = params_to_vector(ws.model.parameters())
-        # Get theta of base theta
-        theta_0 = ws.theta_0
-        # Get delta between theta of mean z and theta of base theta
-        delta = mean_z - z0
-        delta_norm = np.linalg.norm(delta)
-        lr_t = learning_rate
-        # With momentum, update base theta to accumulate learning and avoid aggressive updatess
-        v = momentum * v + lr_t * delta
-        load_solution_to_model(v, ws, device)
-        theta_v = params_to_vector(ws.model.parameters())
-        ws.set_theta(theta_v)
-        # Update base theta in weight sharing
-        # ws.set_theta(v)
-        # Load zero z which means load base theta to model
-        # load_solution_to_model(np.zeros(ws.d), ws, device)
-
-        if (count_batch - 1) % period == 0:
-            theta_base_updated_test_loss, theta_base_updated_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
+            load_solution_to_model(zt, ws, device)
+            theta_zt = params_to_vector(ws.model.parameters(), to_numpy=True)
+            theta_zt_norm = np.linalg.norm(theta_zt)
+            theta_zt_test_loss, theta_zt_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
                                                                 data_loader=val_loader, 
                                                                 device=device, 
                                                                 train=False)
@@ -163,17 +166,12 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
                     'Evolution/best_norm': best_norm_meter,
                     'Evolution/mean_norm': mean_norm_meter,
                     'Evolution/z0_norm': np.linalg.norm(z0),
-                    'Evolution/delta_norm': delta_norm,
-                    'Evolution/theta_mean_norm': theta_mean_norm,
-                    'Evolution/theta_z0_norm': theta_z0_norm,
-                    'Evolution/theta_mean_test_top1': theta_mean_test_top1,
-                    'Evolution/theta_mean_test_loss': theta_mean_test_loss,
+                    'Evolution/theta_zt_norm': theta_zt_norm,
                     'Evolution/theta_z0_test_top1': theta_z0_test_top1,
                     'Evolution/theta_z0_test_loss': theta_z0_test_loss,
-                    'Evolution/theta_base_test_top1': theta_base_test_top1,
-                    'Evolution/theta_base_test_loss': theta_base_test_loss,
-                    'Evolution/theta_base_updated_test_top1': theta_base_updated_test_top1,
-                    'Evolution/theta_base_updated_test_loss': theta_base_updated_test_loss,
+                    'Evolution/theta_z0_norm': theta_z0_norm,
+                    'Evolution/theta_zt_test_top1': theta_zt_test_top1,
+                    'Evolution/theta_zt_test_loss': theta_zt_test_loss,
                     'Evolution/lr': learning_rate
                 }
             )
@@ -186,7 +184,20 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
 
 
 def main(args):
+    # Set environment variable for better CUDA error reporting
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    # Check CUDA memory and provide information
+    if device == 'cuda':
+        print(f"Using CUDA device: {torch.cuda.get_device_name()}")
+        print(f"CUDA memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        print(f"CUDA memory reserved: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
+        torch.cuda.empty_cache()  # Clear any existing cache
+    else:
+        print("Using CPU device")
+    
     if args.seed is not None:
         set_seed(args.seed)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -213,23 +224,23 @@ def main(args):
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        pin_memory=True,
-        num_workers=4
+        pin_memory=False,
+        num_workers=0
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        pin_memory=True,
+        pin_memory=False,
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
-        pin_memory=True,
+        pin_memory=False,
     )
     model = get_model(args.arch, input_size, num_classes, device)
-    theta_0 = params_to_vector(model.parameters(), to_numpy=True)
+    theta_0 = params_to_vector(model.parameters())
     num_weights = len(theta_0)
     
     # Setup loss function
@@ -279,7 +290,7 @@ def main(args):
             'num_iterations': args.num_iterations,
             'num_dims': args.d,
             'popsize': args.popsize,
-            'std': args.std,
+            'es_std': args.es_std,
             'lr': args.lr,
             'wd': args.wd,
             'momentum': args.momentum,
@@ -298,7 +309,7 @@ def main(args):
             tags=[args.arch, args.dataset, args.optimizer, args.ws_type]
         )
     # Main optimization loop
-    best_acc= 0.0
+    best_acc, best_loss = 0.0, 0.0
     epoch = 1
     while epoch <=  args.epochs:
         lr = scheduler.get_lr()
@@ -308,25 +319,56 @@ def main(args):
                                     epoch, num_iterations, lr, 
                                     device, args)
 
-        # es_mean_train_ce, es_mean_train_top1 = evaluate_model(model=ws.model, criterion=torch.nn.functional.cross_entropy, data_loader=train_loader, device=device, train=False)
-        es_mean_test_ce, es_mean_test_top1 = evaluate_model(model=ws.model, 
+        zt = es.get_mean(state=es_state)    # Mean solution from ES
+        load_solution_to_model(zt, ws, device)
+        theta_t = params_to_vector(ws.model.parameters())
+
+        theta_t_test_ce, theta_t_test_top1 = evaluate_model(model=ws.model, 
                                                             criterion=ws.criterion, 
                                                             data_loader=test_loader, 
                                                             device=device, 
                                                             train=False)
-            
+        print(f"theta_0 at epoch {epoch-1}: {theta_0[:5]}")
+        print(f"theta_t at epoch {epoch}: {theta_t[:5]}")
+        delta = theta_t - theta_0
+        delta_norm = torch.norm(delta)
+        print(f"delta at epoch {epoch}: {delta[:5]}")
+        # theta_0 = args.momentum * theta_0 - lr * delta # Not good
+        # theta_0 = (theta_0 + theta_t) / 2 # Works good
+        theta_0 = theta_t - (1 - lr) * delta # First pull towards theta_t and gradually pull towards theta_0
+        print(f"theta_0 at epoch {epoch}: {theta_0[:5]}")
+        ws.load_to_model(theta_0)
+
+        theta_0_test_ce, theta_0_test_top1 = evaluate_model(model=ws.model, 
+                                                            criterion=ws.criterion, 
+                                                            data_loader=test_loader, 
+                                                            device=device, 
+                                                            train=False)
+
         # Log main training metrics to wandb
         log_evaluation_metrics(
             epoch=epoch,
             metrics={'lr': lr,
-                     'Test/loss': es_mean_test_ce,
-                     'Test/top1': es_mean_test_top1}
+                     'Test/loss': theta_0_test_ce,
+                     'Test/top1': theta_0_test_top1,
+                     'Test/theta_t_top1': theta_t_test_top1,
+                     'Test/theta_t_loss': theta_t_test_ce,
+                     'Test/theta_0_loss': theta_0_test_ce,
+                     'Test/theta_0_top1': theta_0_test_top1,
+                     'Test/delta_norm': delta_norm,
+                     }
         )
 
-        print(f"Epoch {epoch}, mean test loss: {es_mean_test_ce:.3f}, mean test top1: {es_mean_test_top1:.3f}")
-            
-        if best_acc < es_mean_test_top1:
-            best_acc = es_mean_test_top1
+        print(f"Epoch {epoch}, theta_0 test loss: {theta_0_test_ce:.3f}, theta_0 test top1: {theta_0_test_top1:.3f}, theta_t test loss: {theta_t_test_ce:.3f}, theta_t test top1: {theta_t_test_top1:.3f}")
+
+        ws.set_theta(theta_0)
+        ws.init()
+
+        es_state = es.init(key=key, mean=np.zeros(args.d), params=es_params)
+
+        if best_acc < theta_0_test_top1:
+            best_acc = theta_0_test_top1
+            best_loss = theta_0_test_ce
             print(f"New best top1: {best_acc:.3f}")
             torch.save({
                 'state_dict': model.state_dict()
@@ -336,12 +378,6 @@ def main(args):
         epoch += 1
 
         scheduler.step()
-
-        # es_params = es_params.replace(std_init=es_params.std_init * 0.9)
-        # theta_0 = params_to_vector(ws.model.parameters())
-        # ws.set_theta(base_theta)
-        # Reset ES state when base_theta changes - the coordinate system has shifted
-        es_state = es.init(key=key, mean=np.zeros(args.d), params=es_params)
     
     torch.save({
                 'state_dict': model.state_dict()
@@ -349,7 +385,7 @@ def main(args):
     print(f"Saved final checkpoint to {os.path.join(save_path, 'checkpoints', f'final_checkpoint.pth.tar')}")
     log_dict = {
         'Final/test_top1': best_acc,
-        'Final/test_loss': es_mean_test_ce,
+        'Final/test_loss': best_loss,
     }
     # Finish wandb run
     finish_wandb_run(log_dict)
@@ -365,8 +401,8 @@ if __name__ == "__main__":
     parser.add_argument('--num_iterations', type=int, default=8)
     parser.add_argument('--d', type=int, default=128)
     parser.add_argument('--popsize', type=int, default=30)
-    parser.add_argument('--std', type=float, default=0.1)
-    parser.add_argument('--lr', type=float, default=0.01)
+    parser.add_argument('--es_std', type=float, default=0.1)
+    parser.add_argument('--lr', type=float, default=0.1)
     parser.add_argument('--wd', type=float, default=5e-4)
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--save_path', type=str, default='logs/results')

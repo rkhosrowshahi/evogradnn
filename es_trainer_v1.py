@@ -53,16 +53,10 @@ def evaluate_population_on_batch(population, ws, batch, weight_decay=0, device='
 def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoch, num_iterations, learning_rate, device, args):
 
     weight_decay = args.wd
-    momentum = args.momentum
 
     train_loader_iterator = itertools.cycle(train_loader)
     num_batches = len(train_loader)
     period = num_batches // 10
-    
-    # Hybrid approach: ES for local exploration + momentum for batch accumulation
-    # This prevents overfitting ES mean to individual random batches
-    z0 = es.get_mean(state=es_state)  # Starting point from ES
-    v = es.get_mean(state=es_state)   # Momentum velocity
 
     mean_loss_meter = AverageMeter(name='mean_loss', fmt=':.4e')
     pop_best_loss_meter = AverageMeter(name='pop_best_loss', fmt=':.4e')
@@ -95,21 +89,31 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
             pop_best_loss_meter.update(np.min(fitnesses))
             pop_avg_loss_meter.update(np.mean(fitnesses))
         
-        # Extract signal from ES exploration, apply momentum accumulation
+        # zt is the mean solution from ES
         zt = es.get_mean(state=es_state)
-        
-        delta = zt - z0  # Direction learned from ES on this batch
-        delta_norm = np.linalg.norm(delta)
-        # delta *= min(1.0, 2.0 / (delta_norm + 1e-8))
-
-        lr_t = learning_rate
-        
-        # Momentum update to accumulate learning across batches
-        v = momentum * v + lr_t * delta
+        load_solution_to_model(zt, ws, device)
 
         # Log to wandb
         if (count_batch - 1) % period == 0:
-            # Load momentum-accumulated solution
+            load_solution_to_model(z0, ws, device)
+            theta_z0 = params_to_vector(ws.model.parameters(), to_numpy=True)
+            theta_z0_norm = np.linalg.norm(theta_z0)
+
+            theta_z0_test_loss, theta_z0_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
+                                                                data_loader=val_loader, 
+                                                                device=device, 
+                                                                train=False)
+
+            load_solution_to_model(zt, ws, device)
+            theta_zt = params_to_vector(ws.model.parameters(), to_numpy=True)
+            theta_zt_norm = np.linalg.norm(theta_zt)
+            theta_zt_test_loss, theta_zt_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
+                                                                data_loader=val_loader, 
+                                                                device=device, 
+                                                                train=False)
+
+        # Log to wandb
+        if (count_batch - 1) % period == 0:
             load_solution_to_model(z0, ws, device)
             theta_z0 = params_to_vector(ws.model.parameters(), to_numpy=True)
             theta_z0_norm = np.linalg.norm(theta_z0)
@@ -137,8 +141,6 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
                     'Evolution/mean_loss': mean_loss_meter.avg,
                     'Evolution/best_norm': best_norm,
                     'Evolution/mean_norm': mean_norm,
-                    'Evolution/momentum_norm': np.linalg.norm(v),
-                    'Evolution/delta_norm': delta_norm,
                     'Evolution/sigma': np.mean(es_state.std),
                     'Evolution/theta_z0_norm': theta_z0_norm,
                     'Evolution/theta_z0_test_top1': theta_z0_test_top1,
@@ -146,7 +148,6 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
                     'Evolution/theta_zt_norm': theta_zt_norm,
                     'Evolution/theta_zt_test_top1': theta_zt_test_top1,
                     'Evolution/theta_zt_test_loss': theta_zt_test_loss,
-                    'Evolution/lr': lr_t
                 }
             )
             print(f"Epoch {epoch}, batch {count_batch}, "
@@ -184,23 +185,25 @@ def main(args):
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        pin_memory=True,
-        drop_last=True
+        pin_memory=False,
+        num_workers=0
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        pin_memory=True,
+        pin_memory=False,
+        num_workers=0
     )
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
         shuffle=False,
-        pin_memory=True,
+        pin_memory=False,
+        num_workers=0
     )
     model = get_model(model_name=args.arch, input_size=input_size, num_classes=num_classes, device=device)
-    theta_0 = params_to_vector(model.parameters(), to_numpy=True)
+    theta_0 = params_to_vector(model.parameters())
     num_weights = len(theta_0)
     
     # Setup loss function
@@ -250,7 +253,7 @@ def main(args):
             'num_iterations': args.num_iterations,
             'num_dims': args.d,
             'popsize': args.popsize,
-            'std': args.std,
+            'es_std': args.es_std,
             'lr': args.lr,
             'wd': args.wd,
             'momentum': args.momentum,
@@ -269,7 +272,7 @@ def main(args):
             tags=[args.arch, args.dataset, args.optimizer, args.ws_type]
         )
     # Main optimization loop
-    best_acc= 0.0
+    best_acc, best_loss = 0.0, 0.0
     epoch = 1
     while epoch <=  args.epochs:
         lr = scheduler.get_lr()
@@ -279,8 +282,11 @@ def main(args):
                                     epoch, num_iterations, lr, 
                                     device, args)
 
+        zt = es.get_mean(state=es_state)
+        load_solution_to_model(zt, ws, device)
+
         # es_mean_train_ce, es_mean_train_top1 = evaluate_model(model=ws.model, criterion=torch.nn.functional.cross_entropy, data_loader=train_loader, device=device, train=False)
-        es_mean_test_ce, es_mean_test_top1 = evaluate_model(model=ws.model, 
+        zt_test_ce, zt_test_top1 = evaluate_model(model=ws.model, 
                                                             criterion=ws.criterion, 
                                                             data_loader=test_loader, 
                                                             device=device, 
@@ -290,14 +296,15 @@ def main(args):
         log_evaluation_metrics(
             epoch=epoch,
             metrics={'lr': lr,
-                     'Test/loss': es_mean_test_ce,
-                     'Test/top1': es_mean_test_top1}
+                     'Test/loss': zt_test_ce,
+                     'Test/top1': zt_test_top1}
         )
 
-        print(f"Epoch {epoch}, mean test loss: {es_mean_test_ce:.3f}, mean test top1: {es_mean_test_top1:.3f}")
+        print(f"Epoch {epoch}, es mean test loss: {zt_test_ce:.3f}, es mean test top1: {zt_test_top1:.3f}")
             
-        if best_acc < es_mean_test_top1:
-            best_acc = es_mean_test_top1
+        if best_acc < zt_test_top1:
+            best_acc = zt_test_top1
+            best_loss = zt_test_ce
             print(f"New best top1: {best_acc:.3f}")
             torch.save({
                 'state_dict': model.state_dict()
@@ -305,8 +312,6 @@ def main(args):
             print(f"Saved checkpoint to {os.path.join(save_path, 'checkpoints', f'best_checkpoint.pth.tar')}")
 
         epoch += 1
-
-        scheduler.step()
     
     torch.save({
                 'state_dict': model.state_dict()
@@ -314,7 +319,7 @@ def main(args):
     print(f"Saved final checkpoint to {os.path.join(save_path, 'checkpoints', f'final_checkpoint.pth.tar')}")
     log_dict = {
         'Final/test_top1': best_acc,
-        'Final/test_loss': es_mean_test_ce,
+        'Final/test_loss': best_loss,
     }
     # Finish wandb run
     finish_wandb_run(log_dict)
@@ -330,8 +335,8 @@ if __name__ == "__main__":
     parser.add_argument('--num_iterations', type=int, default=8)
     parser.add_argument('--d', type=int, default=128)
     parser.add_argument('--popsize', type=int, default=30)
-    parser.add_argument('--std', type=float, default=0.1)
-    parser.add_argument('--lr', type=float, default=0.01)
+    parser.add_argument('--es_std', type=float, default=0.1)
+    parser.add_argument('--lr', type=float, default=0.1)
     parser.add_argument('--wd', type=float, default=5e-4)
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--save_path', type=str, default='logs/results')
