@@ -144,15 +144,30 @@ class GaussianRBFParameterSharing(ParameterSharing):
 class RandomProjectionSoftSharing(ParameterSharing):
     def __init__(self, model, criterion, d, device='cuda', seed=42):
         super().__init__(model, criterion, d, device, seed)
+        self.P = None
+        self.init()
 
+    def init(self):
         P = torch.randn(self.D, self.d, device=self.device)
-        self.P = P / P.norm(dim=0, keepdim=True)
+        P = P / P.norm(dim=0, keepdim=True)
+        self.P = P
+        return P
 
     def expand(self, z):
         if not isinstance(z, torch.Tensor):
             z = torch.tensor(z).float()
         z = z.to(self.device)
         return self.theta_0 + (self.P @ z)
+    
+    def process(self, x, alpha=1.0, max_norm=1.0):
+        if not isinstance(x, torch.Tensor):
+            x = torch.Tensor(x).to(self.device).float()
+            
+        x = x.to(self.device)
+        
+        theta = alpha * x
+        
+        return theta
 
 class SparseRandomProjectionSoftSharing(ParameterSharing):
     def __init__(self, model, criterion, d, device='cuda', seed=42):

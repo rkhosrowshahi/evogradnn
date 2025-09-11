@@ -131,7 +131,7 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
         # Get theta of mean z
         # theta_mean = params_to_vector(ws.model.parameters())
         # Get theta of base theta
-        theta_0 = ws.base_theta
+        theta_0 = ws.theta_0
         # Get delta between theta of mean z and theta of base theta
         delta = mean_z - z0
         delta_norm = np.linalg.norm(delta)
@@ -205,7 +205,7 @@ def main(args):
     print(f"Starting training with arguments: {args}")
     
     # Load data and model
-    train_dataset, val_dataset, test_dataset, num_classes = get_dataset(args.dataset, validation_split=0.01)
+    train_dataset, val_dataset, test_dataset, num_classes, input_size = get_dataset(args.dataset, validation_split=0.01)
     # train_dataset = create_balanced_dataset(train_dataset, num_classes=num_classes, samples_per_class=103)
     batch_size = args.batch_size
     # Create data loaders
@@ -228,9 +228,9 @@ def main(args):
         shuffle=False,
         pin_memory=True,
     )
-    model = get_model(args.arch, num_classes, device)
-    base_theta = params_to_vector(model.parameters(), to_numpy=True)
-    num_weights = len(base_theta)
+    model = get_model(args.arch, input_size, num_classes, device)
+    theta_0 = params_to_vector(model.parameters(), to_numpy=True)
+    num_weights = len(theta_0)
     
     # Setup loss function
     criterion = torch.nn.CrossEntropyLoss() if args.criterion == 'ce' else f1_score_error
@@ -338,7 +338,7 @@ def main(args):
         scheduler.step()
 
         # es_params = es_params.replace(std_init=es_params.std_init * 0.9)
-        # base_theta = params_to_vector(ws.model.parameters())
+        # theta_0 = params_to_vector(ws.model.parameters())
         # ws.set_theta(base_theta)
         # Reset ES state when base_theta changes - the coordinate system has shifted
         es_state = es.init(key=key, mean=np.zeros(args.d), params=es_params)

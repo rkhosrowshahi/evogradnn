@@ -200,8 +200,8 @@ def main(args):
         pin_memory=True,
     )
     model = get_model(model_name=args.arch, input_size=input_size, num_classes=num_classes, device=device)
-    base_theta = params_to_vector(model.parameters(), to_numpy=True)
-    num_weights = len(base_theta)
+    theta_0 = params_to_vector(model.parameters(), to_numpy=True)
+    num_weights = len(theta_0)
     
     # Setup loss function
     criterion = torch.nn.CrossEntropyLoss() if args.criterion == 'ce' else f1_score_error

@@ -58,8 +58,6 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
     train_loader_iterator = itertools.cycle(train_loader)
     num_batches = len(train_loader)
     period = num_batches // 10
-    
-    v = ws.base_theta.clone()  # Momentum velocity
 
     mean_loss_meter = AverageMeter(name='mean_loss', fmt=':.4e')
     pop_best_loss_meter = AverageMeter(name='pop_best_loss', fmt=':.4e')
@@ -95,7 +93,7 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
             mean_norm_meter = mean_z_norm
         
         # Extract signal from ES exploration, apply momentum accumulation
-        mean_z = es.get_mean(state=es_state)
+        zt = es.get_mean(state=es_state)
 
         # Log to wandb
         if (count_batch - 1) % period == 0:
@@ -109,44 +107,15 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
                                                                 device=device, 
                                                                 train=False)
 
-            load_solution_to_model(mean_z, ws, device)
-            theta_mean = params_to_vector(ws.model.parameters(), to_numpy=True)
-            theta_mean_norm = np.linalg.norm(theta_mean)
-            theta_mean_test_loss, theta_mean_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
+            load_solution_to_model(zt, ws, device)
+            theta_zt = params_to_vector(ws.model.parameters(), to_numpy=True)
+            theta_zt_norm = np.linalg.norm(theta_zt)
+            theta_zt_test_loss, theta_zt_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
                                                                 data_loader=val_loader, 
                                                                 device=device, 
                                                                 train=False)
-
-            load_solution_to_model(np.zeros(ws.d), ws, device)
-            theta_base_test_loss, theta_base_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
-                                                                data_loader=val_loader, 
-                                                                device=device, 
-                                                                train=False)
-    
-        # Update base theta with momentum-accumulated solution
-        # Load mean z to model
-        load_solution_to_model(mean_z, ws, device)
-        # Get theta of mean z
-        theta_mean = params_to_vector(ws.model.parameters())
-        # Get theta of base theta
-        theta_0 = ws.base_theta
-        # Get delta between theta of mean z and theta of base theta
-        delta = theta_mean - theta_0
-        delta_norm = torch.norm(delta)
-        lr_t = learning_rate
-        # With momentum, update base theta to accumulate learning and avoid aggressive updatess
-        v = momentum * v + lr_t * delta
-        # Update base theta in weight sharing
-        ws.set_theta(v)
-        # Load zero z which means load base theta to model
-        load_solution_to_model(np.zeros(ws.d), ws, device)
 
         if (count_batch - 1) % period == 0:
-            theta_base_updated_test_loss, theta_base_updated_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
-                                                                data_loader=val_loader, 
-                                                                device=device, 
-                                                                train=False)
-
             log_evolution_metrics(
                 epoch=epoch,
                 batch=count_batch,
@@ -158,17 +127,12 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
                     'Evolution/best_norm': best_norm_meter,
                     'Evolution/mean_norm': mean_norm_meter,
                     'Evolution/z0_norm': np.linalg.norm(z0),
-                    'Evolution/delta_norm': delta_norm,
-                    'Evolution/theta_mean_norm': theta_mean_norm,
-                    'Evolution/theta_z0_norm': theta_z0_norm,
-                    'Evolution/theta_mean_test_top1': theta_mean_test_top1,
-                    'Evolution/theta_mean_test_loss': theta_mean_test_loss,
+                    'Evolution/theta_zt_norm': theta_zt_norm,
                     'Evolution/theta_z0_test_top1': theta_z0_test_top1,
                     'Evolution/theta_z0_test_loss': theta_z0_test_loss,
-                    'Evolution/theta_base_test_top1': theta_base_test_top1,
-                    'Evolution/theta_base_test_loss': theta_base_test_loss,
-                    'Evolution/theta_base_updated_test_top1': theta_base_updated_test_top1,
-                    'Evolution/theta_base_updated_test_loss': theta_base_updated_test_loss,
+                    'Evolution/theta_z0_norm': theta_z0_norm,
+                    'Evolution/theta_zt_test_top1': theta_zt_test_top1,
+                    'Evolution/theta_zt_test_loss': theta_zt_test_loss,
                     'Evolution/lr': learning_rate
                 }
             )
@@ -200,7 +164,7 @@ def main(args):
     print(f"Starting training with arguments: {args}")
     
     # Load data and model
-    train_dataset, val_dataset, test_dataset, num_classes = get_dataset(args.dataset, validation_split=0.01)
+    train_dataset, val_dataset, test_dataset, num_classes, input_size = get_dataset(args.dataset, validation_split=0.01)
     # train_dataset = create_balanced_dataset(train_dataset, num_classes=num_classes, samples_per_class=103)
     batch_size = args.batch_size
     # Create data loaders
@@ -223,9 +187,9 @@ def main(args):
         shuffle=False,
         pin_memory=True,
     )
-    model = get_model(args.arch, num_classes, device)
-    base_theta = params_to_vector(model.parameters(), to_numpy=True)
-    num_weights = len(base_theta)
+    model = get_model(args.arch, input_size, num_classes, device)
+    theta_0 = params_to_vector(model.parameters(), to_numpy=True)
+    num_weights = len(theta_0)
     
     # Setup loss function
     criterion = torch.nn.CrossEntropyLoss() if args.criterion == 'ce' else f1_score_error
@@ -330,12 +294,12 @@ def main(args):
 
         epoch += 1
 
-        scheduler.step()
+        # scheduler.step()
 
-        # es_params = es_params.replace(std_init=es_params.std_init * 0.9)
-        # base_theta = params_to_vector(ws.model.parameters())
-        # ws.set_theta(base_theta)
-        # Reset ES state when base_theta changes - the coordinate system has shifted
+        theta = params_to_vector(ws.model.parameters())
+        ws.set_theta(theta)
+        ws.init()
+
         es_state = es.init(key=key, mean=np.zeros(args.d), params=es_params)
     
     torch.save({
