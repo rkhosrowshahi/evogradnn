@@ -139,8 +139,8 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
         # Log to wandb
         if (count_batch - 1) % period == 0 or count_batch == num_batches or count_batch == 1 or count_batch == 0:
             load_solution_to_model(z0, ws, device)
-            theta_z0 = params_to_vector(ws.model.parameters(), to_numpy=True)
-            theta_z0_norm = np.linalg.norm(theta_z0)
+            theta_z0 = params_to_vector(ws.model.parameters())
+            theta_z0_norm = torch.norm(theta_z0)
 
             theta_z0_test_loss, theta_z0_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
                                                                 data_loader=val_loader, 
@@ -148,8 +148,8 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
                                                                 train=False)
 
             load_solution_to_model(zt, ws, device)
-            theta_zt = params_to_vector(ws.model.parameters(), to_numpy=True)
-            theta_zt_norm = np.linalg.norm(theta_zt)
+            theta_zt = params_to_vector(ws.model.parameters())
+            theta_zt_norm = torch.norm(theta_zt)
             theta_zt_test_loss, theta_zt_test_top1 = evaluate_model(model=ws.model, criterion=ws.criterion, 
                                                                 data_loader=val_loader, 
                                                                 device=device, 
@@ -165,11 +165,10 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
                     'Evolution/mean_loss': mean_loss_meter.avg,
                     'Evolution/best_norm': best_norm_meter,
                     'Evolution/mean_norm': mean_norm_meter,
-                    'Evolution/z0_norm': np.linalg.norm(z0),
-                    'Evolution/theta_zt_norm': theta_zt_norm,
+                    'Evolution/theta_z0_norm': theta_z0_norm,
                     'Evolution/theta_z0_test_top1': theta_z0_test_top1,
                     'Evolution/theta_z0_test_loss': theta_z0_test_loss,
-                    'Evolution/theta_z0_norm': theta_z0_norm,
+                    'Evolution/theta_zt_norm': theta_zt_norm,
                     'Evolution/theta_zt_test_top1': theta_zt_test_top1,
                     'Evolution/theta_zt_test_loss': theta_zt_test_loss,
                     'Evolution/lr': learning_rate
