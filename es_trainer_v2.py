@@ -96,7 +96,7 @@ def train_epoch(es, es_params, es_state, key, ws, train_loader, val_loader, epoc
         zt = es.get_mean(state=es_state)
 
         # Log to wandb
-        if (count_batch - 1) % period == 0:
+        if count_batch == 1 or (count_batch - 1) % period == 0 or count_batch == num_batches:
             # Load momentum-accumulated solution
             load_solution_to_model(z0, ws, device)
             theta_z0 = params_to_vector(ws.model.parameters(), to_numpy=True)
