@@ -24,8 +24,8 @@ class ParameterSharing:
         """
         self.device = device
         self.model = model
-        self.base_theta = params_to_vector(self.model.parameters())
-        self.D = len(self.base_theta)
+        self.theta_0 = params_to_vector(self.model.parameters())
+        self.D = len(self.theta_0)
         self.d = d
         self.criterion = criterion
 
@@ -38,11 +38,11 @@ class ParameterSharing:
 
     def set_model(self, model):
         self.model = model
-        self.base_theta = params_to_vector(self.model.parameters())
-        self.D = len(self.base_theta)
+        self.theta_0 = params_to_vector(self.model.parameters())
+        self.D = len(self.theta_0)
 
     def set_theta(self, theta):
-        self.base_theta = theta
+        self.theta_0 = theta
 
     def expand(self, z):
         """
@@ -138,27 +138,39 @@ class GaussianRBFParameterSharing(ParameterSharing):
         # Weighted sum: (N,) = sum over K
         weights = torch.sum(a[:, None] * phi, dim=0)  # (D,)    
 
-        return weights
+        return self.theta_0 + weights
     
 
-class PerceptronSoftSharing(ParameterSharing):
+class RandomProjectionSoftSharing(ParameterSharing):
     def __init__(self, model, criterion, d, device='cuda', seed=42):
         super().__init__(model, criterion, d, device, seed)
 
-        self.decoder = nn.Linear(self.d, self.D, bias=False)
-        nn.init.normal_(self.decoder.weight, mean=0.0, std=np.sqrt(1/self.d))
-
-        self.decoder.to(self.device)
-        print("Decoder parameters number:", sum(p.numel() for p in self.decoder.parameters()))
+        P = torch.randn(self.D, self.d, device=self.device)
+        self.P = P / P.norm(dim=0, keepdim=True)
 
     def expand(self, z):
         if not isinstance(z, torch.Tensor):
             z = torch.tensor(z).float()
         z = z.to(self.device)
-        with torch.no_grad():
-            x = self.decoder(z)
-        x = self.base_theta + x
-        return x
+        return self.theta_0 + (self.P @ z)
+
+class SparseRandomProjectionSoftSharing(ParameterSharing):
+    def __init__(self, model, criterion, d, device='cuda', seed=42):
+        super().__init__(model, criterion, d, device, seed)
+
+        P = torch.randn(self.D, self.d, device=self.device)
+        s = self.D ** 0.5 # sparsity parameter
+        prob_nonzero = 1/np.sqrt(self.D) # probability of setting the column to nonzero
+        mask = torch.rand(self.D, self.d) < prob_nonzero # mask of columns to set to 0
+        signs = torch.randint(0, 2, (self.D, self.d), device=self.device) * 2 - 1  # +1 or -1
+        P[mask] = signs[mask] * s # set the column to +1 or -1 with probability 1/sqrt(D)
+        self.P = P / P.norm(dim=0, keepdim=True)
+
+    def expand(self, z):
+        if not isinstance(z, torch.Tensor):
+            z = torch.tensor(z).float()
+        z = z.to(self.device)
+        return self.theta_0 + self.P @ z
             
 
 class MLPSoftSharing(ParameterSharing):
@@ -211,8 +223,7 @@ class MLPSoftSharing(ParameterSharing):
         with torch.no_grad():
             x = self.decoder(z)
 
-        x = self.base_theta + x
-        return x
+        return self.theta_0 + x
     
 class HyperNetworkSoftSharing(ParameterSharing):
     def __init__(self, model, criterion, d, hidden_dims: list[int] = [32, 16], emb_init: str = 'sinusoidal', device='cuda', seed=42):
@@ -284,4 +295,4 @@ class HyperNetworkSoftSharing(ParameterSharing):
         params = params.view(batch_size, self.num_layers, self.max_output_size)
         outputs = [params[:, i, :self.layer_sizes[i]] for i in range(self.num_layers)]
 
-        return torch.cat(outputs, dim=1).squeeze(0)
+        return self.theta_0 + torch.cat(outputs, dim=1).squeeze(0)

@@ -215,8 +215,10 @@ def main(args):
         ws = ParameterSharing(model=model, criterion=criterion, d=d, device=args.ws_device, seed=args.seed)
     elif param_sharing_type == 'gaussianrbf':
         ws = GaussianRBFParameterSharing(model=model, criterion=criterion, d=d, device=args.ws_device, seed=args.seed)
-    elif param_sharing_type == 'perceptron':
-        ws = PerceptronSoftSharing(model=model, criterion=criterion, d=d, device=args.ws_device, seed=args.seed)
+    elif param_sharing_type == 'randproj':
+        ws = RandomProjectionSoftSharing(model=model, criterion=criterion, d=d, device=args.ws_device, seed=args.seed)
+    elif param_sharing_type == 'sparseproj':
+        ws = SparseRandomProjectionSoftSharing(model=model, criterion=criterion, d=d, device=args.ws_device, seed=args.seed)
     elif param_sharing_type == 'mlp':
         hidden_dims = [int(dim) for dim in args.hidden_dims.split(',')]
         ws = MLPSoftSharing(model=model, criterion=criterion, d=d, hidden_dims=hidden_dims, use_activation=args.use_activation, activation=args.activation, device=args.ws_device, seed=args.seed)
@@ -333,7 +335,7 @@ if __name__ == "__main__":
     parser.add_argument('--wd', type=float, default=5e-4)
     parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--save_path', type=str, default='logs/results')
-    parser.add_argument('--ws_type', type=str, default='perceptron')
+    parser.add_argument('--ws_type', type=str, default='randproj')
     parser.add_argument('--use_activation', action='store_true', help='Use activation function in MLP soft sharing')
     parser.add_argument('--activation', type=str, default=None, choices=['relu', 'tanh', 'gelu', 'leaky_relu'])
     parser.add_argument('--hidden_dims', type=str, default=None, help='Hidden dimensions for MLP soft sharing')
