@@ -1,0 +1,25 @@
+# Example commands file
+# Lines starting with # are comments and will be ignored
+# Empty lines are also ignored
+
+# Basic system commands
+echo "Starting batch process..."
+python --version
+pip list | head -10
+
+# Machine learning training commands (based on your project)
+python es_trainer_v1.py --epochs 10 --population_size 50
+python es_trainer_v2.py --dataset CIFAR10 --model resnet18
+python es_trainer_v3.py --lr 0.001 --batch_size 32
+
+# Data processing
+python -c "import torch; print(f'PyTorch version: {torch.__version__}')"
+python -c "import numpy as np; print(f'NumPy version: {np.__version__}')"
+
+# File operations
+ls -la logs/results/ || dir logs\results\
+mkdir -p output || mkdir output
+
+# Final status
+echo "All training jobs completed!"
+echo "Check logs/results/ for output files"

@@ -1,0 +1,39 @@
+{
+  "description": "ML Training Pipeline Commands",
+  "default_timeout": null,
+  "stop_on_error": true,
+  "commands": [
+    {
+      "name": "ES Training v1 randproj for CIFAR10 and ResNet32 with 256 dimensions",
+      "command": "python es_trainer_v1.py --dataset cifar10 --arch resnet32 --num_iterations 1 --epochs 100 --ws_type randproj --es_std 0.1 --optimizer CMA_ES --d 256"
+    },
+    {
+      "name": "ES Training v1 randproj for CIFAR10 and ResNet32 with 512 dimensions", 
+      "command": "python es_trainer_v1.py --dataset cifar10 --arch resnet32 --num_iterations 1 --epochs 100 --ws_type randproj --es_std 0.1 --optimizer CMA_ES --d 512"
+    },
+    {
+      "name": "ES Training v1 randproj for CIFAR10 and ResNet32 with 1024 dimensions",
+      "command": "python es_trainer_v1.py --dataset cifar10 --arch resnet32 --num_iterations 1 --epochs 100 --ws_type randproj --es_std 0.1 --optimizer CMA_ES --d 1024"
+    },
+    {
+      "name": "ES Training v1 randproj for CIFAR10 and ResNet32 with 2048 dimensions",
+      "command": "python es_trainer_v1.py --dataset cifar10 --arch resnet32 --num_iterations 1 --epochs 100 --ws_type randproj --es_std 0.1 --optimizer CMA_ES --d 2048"
+    },
+    {
+        "name": "ES Training v1 randproj for CIFAR10 and LeNet with 256 dimensions",
+        "command": "python es_trainer_v1.py --dataset cifar10 --arch lenet --num_iterations 1 --epochs 100 --ws_type randproj --es_std 0.1 --optimizer CMA_ES --d 256"
+    },
+    {
+        "name": "ES Training v1 randproj for CIFAR10 and LeNet with 512 dimensions",
+        "command": "python es_trainer_v1.py --dataset cifar10 --arch lenet --num_iterations 1 --epochs 100 --ws_type randproj --es_std 0.1 --optimizer CMA_ES --d 512"
+    },
+    {
+        "name": "ES Training v1 randproj for CIFAR10 and LeNet with 1024 dimensions",
+        "command": "python es_trainer_v1.py --dataset cifar10 --arch lenet --num_iterations 1 --epochs 100 --ws_type randproj --es_std 0.1 --optimizer CMA_ES --d 1024"
+    },
+    {
+        "name": "ES Training v1 randproj for CIFAR10 and LeNet with 2048 dimensions",
+        "command": "python es_trainer_v1.py --dataset cifar10 --arch lenet --num_iterations 1 --epochs 100 --ws_type randproj --es_std 0.1 --optimizer CMA_ES --d 2048"
+    }
+  ]
+}

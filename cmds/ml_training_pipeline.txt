@@ -1,0 +1,27 @@
+# ML Training Pipeline for EvoGradNN
+# Run with: python command_runner.py -f ml_training_pipeline.txt
+# No timeouts - training runs can take unlimited time
+
+# Environment check
+echo "🚀 Starting ML Training Pipeline..."
+python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
+
+# Data verification
+python -c "import os; print(f'Data directory exists: {os.path.exists(\"data/cifar-10-batches-py\")}')"
+
+# Training experiments (adjust parameters as needed)
+echo "📊 Running ES Trainer v1..."
+python es_trainer_v1.py --epochs 5 --population_size 20
+
+echo "📊 Running ES Trainer v2..."  
+python es_trainer_v2.py --epochs 5 --population_size 20
+
+echo "📊 Running ES Trainer v3..."
+python es_trainer_v3.py --epochs 5 --population_size 20
+
+# Results analysis
+echo "📈 Analyzing results..."
+python -c "import os; results = [d for d in os.listdir('logs/results/') if os.path.isdir(f'logs/results/{d}')]; print(f'Generated {len(results)} experiment results')"
+
+echo "✅ Training pipeline completed!"
+echo "Check logs/results/ for detailed outputs"

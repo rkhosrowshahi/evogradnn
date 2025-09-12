@@ -1,8 +1,9 @@
 import torch.nn as nn
 # Import CIFAR10 model variants
-from .CIFAR10 import CIFAR300K, CIFAR900K, CIFAR8M
+from .cifar10 import CIFAR300K, CIFAR900K, CIFAR8M
 # Import MNIST model variants
-from .MNIST import MNIST30K, MNIST500K, MNIST3M, LeNet
+from .mnist import MNIST30K, MNIST500K, MNIST3M
+from .lenet import LeNetCIFAR, LeNetMNIST
 # Import ResNet architectures
 # from .resnets import ResNet18, ResNet34, ResNet50
 from torchvision.models import resnet18, resnet34, resnet50, resnet101, resnet152
@@ -51,7 +52,12 @@ def get_model(model_name, input_size, num_classes, device='cuda'):
     elif model_name == 'mnist3m':
         model = MNIST3M() # For MNISTs
     elif model_name == 'lenet':
-        model = LeNet() # For MNISTs
+        if input_size == 32:
+            model = LeNetCIFAR() # For CIFARs
+        elif input_size == 28:
+            model = LeNetMNIST() # For MNISTs
+        else:
+            raise ValueError(f"Input size {input_size} not supported for LeNet")
     else:
         raise ValueError(f"Model {model_name} not supported")
     
@@ -67,4 +73,7 @@ def get_model(model_name, input_size, num_classes, device='cuda'):
     return model.to(device)
 
 # List of all available models for export
-__all__ = ["CIFAR300K", "CIFAR900K", "CIFAR8M", "MNIST30K", "MNIST500K", "MNIST3M", "ResNet18", "ResNet34", "ResNet50", "ResNet101", "ResNet152", "ResNet20", "ResNet32", "ResNet56"]
+__all__ = ["CIFAR300K", "CIFAR900K", "CIFAR8M", 
+            "MNIST30K", "MNIST500K", "MNIST3M", 
+            "ResNet18", "ResNet34", "ResNet50", "ResNet101", "ResNet152", "ResNet20", "ResNet32", "ResNet56", 
+            "LeNetCIFAR", "LeNetMNIST"]

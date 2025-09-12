@@ -1,0 +1,34 @@
+# ML Training Pipeline Configuration
+description: "Evolution Strategy Neural Network Training Pipeline"
+settings:
+  default_timeout: null  # No timeout - unlimited time for long ML training runs
+  stop_on_error: true
+  parallel: false
+  max_workers: 2
+
+# Environment setup commands
+setup:
+  - name: "Check Python Environment"
+    command: "python --version"
+    
+  - name: "Check Dependencies"
+    command: "python -c \"import torch, numpy, sklearn, wandb; print('✓ All dependencies available')\""
+
+# Main training pipeline - no timeouts for unlimited training time
+training:
+  - name: "ES Trainer v1 - Basic"
+    command: "python es_trainer_v1.py --epochs 10 --population_size 50 --dataset CIFAR10"
+    
+  - name: "ES Trainer v2 - Enhanced"
+    command: "python es_trainer_v2.py --epochs 10 --population_size 50 --dataset CIFAR10"
+    
+  - name: "ES Trainer v3 - Advanced"
+    command: "python es_trainer_v3.py --epochs 10 --population_size 50 --dataset CIFAR10"
+
+# Post-processing
+analysis:
+  - name: "Generate Results Summary"
+    command: "python -c \"import os; results = os.listdir('logs/results/'); print(f'Generated {len(results)} result directories')\""
+    
+  - name: "Check Latest Results"
+    command: "ls -la logs/results/ | tail -5"
