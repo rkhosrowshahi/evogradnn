@@ -53,7 +53,7 @@ def get_model(model_name, input_size, num_classes, device='cuda'):
         model = MNIST3M() # For MNISTs
     elif model_name == 'lenet':
         if input_size == 32:
-            model = LeNetCIFAR() # For CIFARs
+            model = LeNetCIFAR(num_classes=num_classes) # For CIFARs
         elif input_size == 28:
             model = LeNetMNIST() # For MNISTs
         else:
