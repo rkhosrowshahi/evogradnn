@@ -3,7 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 
 class LeNetMNIST(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes=10):
         super().__init__()
         self.conv1 = nn.Conv2d(1, 6, kernel_size=5) # -> 6x24x24
         self.pool = nn.MaxPool2d(2, 2) # -> halves spatial dims
@@ -12,7 +12,7 @@ class LeNetMNIST(nn.Module):
         # Flatten size after conv/pool: 16 * 4 * 4 = 256
         self.fc1 = nn.Linear(16 * 4 * 4, 120)
         self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+        self.fc3 = nn.Linear(84, num_classes)
 
         self.relu = nn.ReLU(inplace=True)
 
@@ -30,7 +30,7 @@ class LeNetMNIST(nn.Module):
     
 
 class LeNetCIFAR(nn.Module):
-    def __init__(self):
+    def __init__(self, num_classes=10):
         super(LeNetCIFAR, self).__init__()
         # Input: (3, 32, 32)
         self.conv1 = nn.Conv2d(3, 6, kernel_size=5) # -> (6, 28, 28)
@@ -39,7 +39,7 @@ class LeNetCIFAR(nn.Module):
         # Pool -> (16, 5, 5)
         self.fc1 = nn.Linear(16 * 5 * 5, 120) # 400 -> 120
         self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+        self.fc3 = nn.Linear(84, num_classes)
 
         self.relu = nn.ReLU(inplace=True)
 
