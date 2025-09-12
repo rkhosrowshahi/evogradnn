@@ -18,3 +18,5 @@ models/__pycache__/
 *.ipynb
 archive/
 notes/
+cmds/
+cmds/commands_config.json

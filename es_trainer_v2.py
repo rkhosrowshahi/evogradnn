@@ -349,8 +349,8 @@ def main(args):
         log_evaluation_metrics(
             epoch=epoch,
             metrics={'lr': lr,
-                     'Test/loss': theta_0_test_ce,
-                     'Test/top1': theta_0_test_top1,
+                     'Test/loss': theta_t_test_ce,
+                     'Test/top1': theta_t_test_top1,
                      'Test/theta_t_top1': theta_t_test_top1,
                      'Test/theta_t_loss': theta_t_test_ce,
                      'Test/theta_0_loss': theta_0_test_ce,

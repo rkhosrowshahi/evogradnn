@@ -332,9 +332,15 @@ def main(args):
         delta = theta_t - theta_0
         delta_norm = torch.norm(delta)
         print(f"delta at epoch {epoch}: {delta[:5]}")
+        # global_norm = torch.sqrt(sum((d.detach()**2).sum() for d in delta))
+        # r = 0.05 * delta_norm
+        # scale = min(1.0, r / (global_norm + 1e-12))
+        # delta_scaled = delta * scale
+        # theta_0 = theta_0 + lr * delta_scaled
         # theta_0 = args.momentum * theta_0 - lr * delta # Not good
         # theta_0 = (theta_0 + theta_t) / 2 # Works good
-        theta_0 = theta_t - (1 - lr) * delta # First pull towards theta_t and gradually pull towards theta_0
+        # theta_0 = theta_t - (1 - lr) * delta # First pull towards theta_t and gradually pull towards theta_0
+        theta_0 = (1 - lr) * theta_0 + lr * theta_t # Hard update on theta_0
         print(f"theta_0 at epoch {epoch}: {theta_0[:5]}")
         ws.load_to_model(theta_0)
 
@@ -376,7 +382,7 @@ def main(args):
 
         epoch += 1
 
-        scheduler.step()
+        # scheduler.step()
     
     torch.save({
                 'state_dict': model.state_dict()
