@@ -1,0 +1,91 @@
+{
+  "description": "New Anchor Strategies for Evolutionary Neural Network Training",
+  "default_timeout": null,
+  "stop_on_error": true,
+  "commands": [
+    {
+      "name": "Adaptive Learning Rate Anchor (ALA) - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 50 --ws randproj --normalize_projection --es_std 0.1 --anchor ala --lr 1.0 --lr_scheduler constant --improvement_factor 1.5 --decay_factor 0.7"
+    },
+    {
+      "name": "Momentum-Based Anchor (MBA) - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 50 --ws randproj --normalize_projection --es_std 0.1 --anchor mba --lr 1.0 --lr_scheduler constant --momentum 0.95"
+    },
+    {
+      "name": "Multi-Scale Anchor (MSA) - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 50 --ws randproj --normalize_projection --es_std 0.1 --anchor msa --lr 1.0 --lr_scheduler constant"
+    },
+    {
+      "name": "Performance-Weighted Anchor (PWA) - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 50 --ws randproj --normalize_projection --es_std 0.1 --anchor pwa --lr 1.0 --lr_scheduler constant --performance_weight 1.2"
+    },
+    {
+      "name": "Hierarchical Anchor (HA) - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 50 --ws randproj --normalize_projection --es_std 0.1 --anchor ha --lr 1.0 --lr_scheduler constant --momentum 0.9"
+    },
+    {
+      "name": "Adaptive Learning Rate Anchor (ALA) - CIFAR10, ResNet32, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch resnet32 --optimizer CMA_ES --d 256 --criterion ce --inner_steps 2 --epochs 100 --ws randproj --normalize_projection --es_std 0.1 --anchor ala --lr 1.0 --lr_scheduler cosine --improvement_factor 1.3 --decay_factor 0.8"
+    },
+    {
+      "name": "Momentum-Based Anchor (MBA) - CIFAR10, ResNet32, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch resnet32 --optimizer CMA_ES --d 256 --criterion ce --inner_steps 2 --epochs 100 --ws randproj --normalize_projection --es_std 0.1 --anchor mba --lr 1.0 --lr_scheduler cosine --momentum 0.9"
+    },
+    {
+      "name": "Multi-Scale Anchor (MSA) - CIFAR10, ResNet32, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch resnet32 --optimizer CMA_ES --d 256 --criterion ce --inner_steps 2 --epochs 100 --ws randproj --normalize_projection --es_std 0.1 --anchor msa --lr 1.0 --lr_scheduler cosine"
+    },
+    {
+      "name": "Performance-Weighted Anchor (PWA) - CIFAR10, ResNet32, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch resnet32 --optimizer CMA_ES --d 256 --criterion ce --inner_steps 2 --epochs 100 --ws randproj --normalize_projection --es_std 0.1 --anchor pwa --lr 1.0 --lr_scheduler cosine --performance_weight 1.1"
+    },
+    {
+      "name": "Hierarchical Anchor (HA) - CIFAR10, ResNet32, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch resnet32 --optimizer CMA_ES --d 256 --criterion ce --inner_steps 2 --epochs 100 --ws randproj --normalize_projection --es_std 0.1 --anchor ha --lr 1.0 --lr_scheduler cosine --momentum 0.9"
+    },
+    {
+      "name": "Comparison: Fixed vs ALA vs MBA - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 30 --ws randproj --normalize_projection --es_std 0.1 --anchor fixed --lr 1.0 --lr_scheduler constant"
+    },
+    {
+      "name": "Comparison: Fixed vs ALA vs MBA - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 30 --ws randproj --normalize_projection --es_std 0.1 --anchor ala --lr 1.0 --lr_scheduler constant --improvement_factor 1.2 --decay_factor 0.8"
+    },
+    {
+      "name": "Comparison: Fixed vs ALA vs MBA - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 30 --ws randproj --normalize_projection --es_std 0.1 --anchor mba --lr 1.0 --lr_scheduler constant --momentum 0.9"
+    },
+    {
+      "name": "Ensemble Anchor (EA) - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 50 --ws randproj --normalize_projection --es_std 0.1 --anchor ea --lr 1.0 --lr_scheduler constant --ensemble_size 3"
+    },
+    {
+      "name": "Uncertainty-Aware Anchor (UAA) - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 50 --ws randproj --normalize_projection --es_std 0.1 --anchor uaa --lr 1.0 --lr_scheduler constant"
+    },
+    {
+      "name": "Adaptive Proposing Space (APS) - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 50 --ws randproj --normalize_projection --es_std 0.1 --anchor aps --lr 1.0 --lr_scheduler constant --max_d_ratio 2.0 --min_d_ratio 0.5"
+    },
+    {
+      "name": "Multi-Objective Anchor (MOA) - CIFAR10, LeNet, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 128 --criterion ce --inner_steps 1 --epochs 50 --ws randproj --normalize_projection --es_std 0.1 --anchor moa --lr 1.0 --lr_scheduler constant --objective_weights 0.7,0.3"
+    },
+    {
+      "name": "Ensemble Anchor (EA) - CIFAR10, ResNet32, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch resnet32 --optimizer CMA_ES --d 256 --criterion ce --inner_steps 2 --epochs 100 --ws randproj --normalize_projection --es_std 0.1 --anchor ea --lr 1.0 --lr_scheduler cosine --ensemble_size 5"
+    },
+    {
+      "name": "Uncertainty-Aware Anchor (UAA) - CIFAR10, ResNet32, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch resnet32 --optimizer CMA_ES --d 256 --criterion ce --inner_steps 2 --epochs 100 --ws randproj --normalize_projection --es_std 0.1 --anchor uaa --lr 1.0 --lr_scheduler cosine"
+    },
+    {
+      "name": "Adaptive Proposing Space (APS) - CIFAR10, ResNet32, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch resnet32 --optimizer CMA_ES --d 256 --criterion ce --inner_steps 2 --epochs 100 --ws randproj --normalize_projection --es_std 0.1 --anchor aps --lr 1.0 --lr_scheduler cosine --max_d_ratio 1.5 --min_d_ratio 0.7"
+    },
+    {
+      "name": "Multi-Objective Anchor (MOA) - CIFAR10, ResNet32, CMA_ES",
+      "command": "python es_trainer.py --dataset cifar10 --arch resnet32 --optimizer CMA_ES --d 256 --criterion ce --inner_steps 2 --epochs 100 --ws randproj --normalize_projection --es_std 0.1 --anchor moa --lr 1.0 --lr_scheduler cosine --objective_weights 0.8,0.2"
+    }
+  ]
+}

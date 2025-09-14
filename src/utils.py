@@ -70,7 +70,7 @@ def log_evaluation_metrics(epoch: int, metrics: dict = None) -> None:
     
     log_metrics(log_dict)
 
-def log_evolution_metrics(epoch: int, batch: int, metrics: dict = None) -> None:
+def log_evolution_metrics(epoch: int, metrics: dict = None) -> None:
     """Log evolution algorithm metrics to W&B.
     
     Args:
@@ -79,7 +79,6 @@ def log_evolution_metrics(epoch: int, batch: int, metrics: dict = None) -> None:
     """
     log_dict = {
         'Epoch': epoch,
-        'Batch': batch,
     }
     
     if metrics:
@@ -314,14 +313,13 @@ def set_seed(seed: int) -> None:
 
 # --------------------- Model Evaluation Functions ---------------------
 
-def evaluate_model(
+def evaluate_model_on_test(
     model: nn.Module,
     data_loader: DataLoader,
-    criterion: nn.Module,
     train: bool = False,
     device: str = 'cuda'
-) -> float:
-    """Evaluate model accuracy on a dataset.
+) -> Tuple[float, float, float]:
+    """Evaluate model cross entropy loss, accuracy and F1 score on a dataset.
     
     Args:
         model: Neural network model
@@ -330,29 +328,43 @@ def evaluate_model(
         train: If True, only evaluate on one batch
         
     Returns:
-        Classification accuracy as percentage
+        Tuple of (loss, accuracy, f1_score)
     """
     model.eval()
     model.to(device)
-    loss = 0
-    correct = 0
-    total = 0
+    criterion = nn.CrossEntropyLoss()
+    top1 = AverageMeter('Top1', ':6.4f')
+    top5 = AverageMeter('Top5', ':6.4f')
+    f1 = 0
+    ce_loss = AverageMeter('CE Loss', ':6.4f')
     num_batches = len(data_loader)
     
+    all_predictions = []
+    all_targets = []
+    
     with torch.no_grad():
-        for inputs, labels in data_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
-            outputs = model(inputs)
-            loss += criterion(outputs, labels).item()
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+        for inputs, targets in data_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            logits = model(inputs)
+            ce_loss.update(criterion(logits, targets).item())
+            _, predicted = torch.max(logits.data, 1)
             
+            # Collect predictions and labels for F1 score
+            all_predictions.extend(predicted)
+            all_targets.extend(targets)
+
+            topk = accuracy(logits, targets, topk=(1,5))
+            top1.update(topk[0].item(), targets.size(0))
+            top5.update(topk[1].item(), targets.size(0))
+
             if train:
-                correct *= -1  # Negate for minimization in CMA-ES
                 break
-                
-    return loss / num_batches, 100 * correct / total
+    
+    acc1 = top1.avg
+    acc5 = top5.avg
+    f1 = f1_score(y_true=torch.tensor(all_targets).cpu().numpy(), y_pred=torch.tensor(all_predictions).cpu().numpy(), average='macro')
+    
+    return ce_loss.avg, acc1, acc5, f1
 
 def evaluate_model_acc(
     model: nn.Module,
@@ -795,6 +807,22 @@ def f1_score_error(output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     f1 = -f1_score(target, predicted, average='macro')
     return torch.tensor(f1, device=output.device)
 
+def accuracy(output: torch.Tensor, target: torch.Tensor, topk=(1,)):
+    """Computes the accuracy over the k top predictions for the specified values of k"""
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = target.size(0)
+
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(target.view(1, -1).expand_as(pred)).contiguous()
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res
+
 def plot_convergence(acc_tracker: Dict[int, float], save_path: str) -> None:
     """Plot convergence curve of accuracy over iterations.
     
@@ -1165,45 +1193,3 @@ def plot_param_distribution(x, save_path):
     plt.grid(True)
     plt.savefig(f"{save_path}")
     plt.close()
-
-
-class CosineAnnealingScheduler:
-    def __init__(self, eta_max, eta_min, T_max, T_mult=1):
-        """
-        Cosine Annealing Learning Rate Scheduler.
-        
-        Args:
-            eta_max (float): Maximum learning rate.
-            eta_min (float): Minimum learning rate.
-            T_max (int): Number of steps per half-cycle (cosine decay period).
-            T_mult (float): Multiplier for T_max after each restart (default: 1, no increase).
-        """
-        self.eta_max = eta_max
-        self.eta_min = eta_min
-        self.T_max = T_max
-        self.T_mult = T_mult
-        self.current_step = 0
-        self.current_T_max = T_max
-        self.cycle = 0
-
-    def get_lr(self):
-        """
-        Compute the learning rate for the current step.
-        
-        Returns:
-            float: Current learning rate.
-        """
-        cosine_decay = 0.5 * (1 + np.cos(np.pi * (self.current_step % self.current_T_max) / self.current_T_max))
-        lr = self.eta_min + (self.eta_max - self.eta_min) * cosine_decay
-        return lr
-
-    def step(self):
-        """
-        Increment the step and update the scheduler.
-        Handles warm restarts if T_mult > 1.
-        """
-        self.current_step += 1
-        if self.current_step % self.current_T_max == 0:
-            self.cycle += 1
-            self.current_T_max = self.T_max * (self.T_mult ** self.cycle)
-            self.current_step = 0
