@@ -106,6 +106,9 @@ class ParameterSharing:
             Processed parameter tensor of shape (D,)
         """
         if not isinstance(x, torch.Tensor):
+            # Handle JAX arrays by converting to numpy first
+            if hasattr(x, 'shape'):  # JAX array
+                x = np.array(x)
             x = torch.Tensor(x).to(self.device).float()
             
         x = x.to(self.device)
@@ -200,6 +203,9 @@ class GaussianRBFParameterSharing(ParameterSharing):
             theta_0 + sum_i(a_i * exp(-gamma_i * ||x - c_i||^2))
         """
         if not isinstance(z, torch.Tensor):
+            # Handle JAX arrays by converting to numpy first
+            if hasattr(z, 'shape'):  # JAX array
+                z = np.array(z)
             z = torch.tensor(z).float()
         d, p, D = self.d, self.coord_dim, self.D
         z = z.view(d, p + 2)
@@ -270,6 +276,9 @@ class RandomProjectionSoftSharing(ParameterSharing):
             Full parameter tensor of shape (D,) computed as theta_0 + P @ z
         """
         if not isinstance(z, torch.Tensor):
+            # Handle JAX arrays by converting to numpy first
+            if hasattr(z, 'shape'):  # JAX array
+                z = np.array(z)
             z = torch.tensor(z).float()
         z = z.to(self.device)
         return self.theta_0 + (self.P @ z)
@@ -286,6 +295,9 @@ class RandomProjectionSoftSharing(ParameterSharing):
             Processed parameter tensor of shape (D,)
         """
         if not isinstance(x, torch.Tensor):
+            # Handle JAX arrays by converting to numpy first
+            if hasattr(x, 'shape'):  # JAX array
+                x = np.array(x)
             x = torch.Tensor(x).to(self.device).float()
             
         x = x.to(self.device)
@@ -338,6 +350,9 @@ class SparseRandomProjectionSoftSharing(ParameterSharing):
             where P is a sparse random projection matrix
         """
         if not isinstance(z, torch.Tensor):
+            # Handle JAX arrays by converting to numpy first
+            if hasattr(z, 'shape'):  # JAX array
+                z = np.array(z)
             z = torch.tensor(z).float()
         z = z.to(self.device)
         return self.theta_0 + self.P @ z
@@ -426,6 +441,9 @@ class MLPSoftSharing(ParameterSharing):
             Full parameter tensor of shape (D,) computed as theta_0 + MLP(z)
         """
         if not isinstance(z, torch.Tensor):
+            # Handle JAX arrays by converting to numpy first
+            if hasattr(z, 'shape'):  # JAX array
+                z = np.array(z)
             z = torch.tensor(z).float()
         z = z.to(self.device)
         with torch.no_grad():
@@ -513,6 +531,9 @@ class HyperNetworkSoftSharing(ParameterSharing):
             the hypernetwork conditioned on layer embeddings
         """
         if not isinstance(z, torch.Tensor):
+            # Handle JAX arrays by converting to numpy first
+            if hasattr(z, 'shape'):  # JAX array
+                z = np.array(z)
             z = torch.tensor(z).float()
         z = z.to(self.device)
         z = z.unsqueeze(0)
