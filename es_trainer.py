@@ -314,7 +314,7 @@ def main(args):
                                                             train=False)
         print(f"theta_0 at epoch {epoch-1}: {theta_0[:5]}")
         print(f"theta_t at epoch {epoch}: {theta_t[:5]}")
-        delta = theta_t - theta_0
+        delta = theta_t - theta_anchor
         delta_norm = torch.norm(delta)
         print(f"delta at epoch {epoch}: {delta[:5]}")
         test_ce, test_top1, test_top5, test_f1 = 0, 0, 0, 0

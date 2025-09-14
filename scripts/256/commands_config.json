@@ -4,14 +4,6 @@
   "stop_on_error": true,
   "commands": [
     {
-      "name": "CIFAR10, ResNet32, criterion=ce, CMA_ES, es_std=1.0, randproj, normalize_projection, d=256, anchor=fixed, lr_scheduler=constant, lr=1.0",
-      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 256 --criterion ce --inner_steps 1 --epochs 100 --ws randproj --normalize_projection --es_std 1.0 --anchor fixed --lr 1.0 --lr_scheduler constant"
-    },
-    {
-      "name": "CIFAR10, ResNet32, criterion=ce, CMA_ES, es_std=1.0, randproj, normalize_projection, d=256, anchor=full, lr_scheduler=constant, lr=1.0",
-      "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 256 --criterion ce --inner_steps 1 --epochs 100 --ws randproj --normalize_projection --es_std 1.0 --anchor full --lr 1.0 --lr_scheduler constant"
-    },
-    {
       "name": "CIFAR10, ResNet32, criterion=ce, CMA_ES, es_std=1.0, randproj, normalize_projection, d=256, anchor=ema, lr_scheduler=step, lr_scheduler_step_size=10, lr_scheduler_gamma=0.9, lr=1.0",
       "command": "python es_trainer.py --dataset cifar10 --arch lenet --optimizer CMA_ES --d 256 --criterion ce --inner_steps 1 --epochs 100 --ws randproj --normalize_projection --es_std 1.0 --anchor ema --lr 1.0 --lr_scheduler step --lr_scheduler_step_size 10 --lr_scheduler_gamma 0.9"
     }
