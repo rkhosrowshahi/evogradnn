@@ -34,7 +34,7 @@ class LeNetCIFAR(nn.Module):
         super(LeNetCIFAR, self).__init__()
         # Input: (3, 32, 32)
         self.conv1 = nn.Conv2d(3, 6, kernel_size=5) # -> (6, 28, 28)
-        self.pool = nn.AvgPool2d(2, 2) # -> (6, 14, 14)
+        self.pool = nn.MaxPool2d(2, 2) # -> (6, 14, 14)
         self.conv2 = nn.Conv2d(6, 16, kernel_size=5) # -> (16, 10, 10)
         # Pool -> (16, 5, 5)
         self.fc1 = nn.Linear(16 * 5 * 5, 120) # 400 -> 120

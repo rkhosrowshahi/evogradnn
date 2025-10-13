@@ -2,12 +2,13 @@ import argparse
 import os
 import random
 import sys
-from typing import Dict, List, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 import numpy as np
 import optax
 from sklearn.decomposition import PCA
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
 from matplotlib import pyplot as plt
@@ -15,83 +16,12 @@ import scienceplots
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 from torch.optim.lr_scheduler import _LRScheduler
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 from evosax.algorithms.distribution_based import distribution_based_algorithms
 from evosax.algorithms.population_based import population_based_algorithms
 from evosax.core.fitness_shaping import *
 from scipy.stats import norm
 import wandb
-
-# --------------------- Weights & Biases Functions ---------------------
-
-def init_wandb(project_name: str, run_name: str = None, config: dict = None, group: str = None, tags: list = None) -> None:
-    """Initialize Weights & Biases logging.
-    
-    Args:
-        project_name: Name of the W&B project
-        run_name: Optional name for the run
-        config: Dictionary of hyperparameters and configuration
-        group: Optional group name for organizing runs
-        tags: Optional list of tags for the run
-    """
-    wandb.init(
-        project=project_name,
-        name=run_name,
-        config=config,
-        group=group,
-        tags=tags,
-        reinit=True
-    )
-
-def log_metrics(metrics_dict: dict, step: int = None) -> None:
-    """Log metrics to Weights & Biases.
-    
-    Args:
-        metrics_dict: Dictionary of metric names and values
-        step: Optional step number for the metrics
-    """
-    if wandb.run is not None:
-        wandb.log(metrics_dict, step=step)
-
-def log_evaluation_metrics(epoch: int, metrics: dict = None) -> None:
-    """Log training and testing metrics to W&B.
-    
-    Args:
-        epoch: Current epoch number
-        metrics: Dictionary of metric names and values
-        metrics: Optional dictionary of additional metrics
-    """
-    log_dict = {
-        'Epoch': epoch,
-    }
-    
-    if metrics:
-        log_dict.update(metrics)
-    
-    log_metrics(log_dict)
-
-def log_evolution_metrics(epoch: int, metrics: dict = None) -> None:
-    """Log evolution algorithm metrics to W&B.
-    
-    Args:
-        epoch: Current epoch number
-        metrics: Optional dictionary of additional metrics
-    """
-    log_dict = {
-        'Epoch': epoch,
-    }
-    
-    if metrics:
-        log_dict.update(metrics)
-    
-    log_metrics(log_dict)
-
-def finish_wandb_run(log_dict: dict = None) -> None:
-    """Finish the current W&B run."""
-    if log_dict is not None:
-        wandb.log(log_dict)
-    if wandb.run is not None:
-        wandb.finish()
 
 # --------------------- Model Save/Load Functions ---------------------
 
@@ -152,7 +82,7 @@ def get_balanced_indices(dataset, split_size: int = 1000) -> Tuple[torch.Tensor,
     
     return torch.tensor(val_idx), torch.tensor(train_idx)
 
-def get_dataset(dataset: str, validation_split: float = 0.1) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
+def create_dataset(args, validation_split: float = 0.1) -> Tuple[Subset, Subset, Subset, int, int]:
     """Load and prepare dataset with train/val/test splits.
     
     Args:
@@ -165,6 +95,7 @@ def get_dataset(dataset: str, validation_split: float = 0.1) -> Tuple[DataLoader
     Raises:
         ValueError: If dataset name is not supported
     """
+    dataset = args.dataset
     if dataset == 'cifar100':
         num_classes = 100
         stats = ((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
@@ -230,7 +161,53 @@ def get_dataset(dataset: str, validation_split: float = 0.1) -> Tuple[DataLoader
     val_dataset = Subset(train_dataset, val_indices)
     train_dataset = Subset(train_dataset, train_indices)
     
-    return train_dataset, val_dataset, test_dataset, num_classes, input_size
+    batch_size = args.batch_size
+    # Create data loaders
+    train_loader = None
+    # Helper function to create weighted sampler and loader
+    def create_inverse_balanced_loader():
+        labels = [train_dataset.dataset.targets[i] for i in train_dataset.indices]
+        class_counts = np.bincount(labels)
+        class_weights = 1.0 / class_counts
+        sample_weights = [class_weights[label] for label in labels]
+        
+        sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True
+        )
+    if args.sampler == 'inverse':
+        sampler = create_inverse_balanced_loader()
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            sampler=sampler,
+            pin_memory=False,
+            num_workers=0
+        )
+    else:
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            pin_memory=False,
+            num_workers=0
+        )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        pin_memory=False,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        pin_memory=False,
+    )
+    
+    return train_loader, val_loader, test_loader, num_classes, input_size
 
 def create_balanced_dataset(dataset, num_classes: int, samples_per_class: int = None) -> Subset:
     """Create a balanced dataset with equal samples per class.
@@ -790,30 +767,367 @@ def sgd_finetune(
         optimizer.step()
         countfe += 1
 
-def f1_score_error(output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """Calculate F1 score error for model output.
+def f1_loss(input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Calculate F1 loss for model output.
     
     Args:
-        output: Model output logits
+        input: Model output logits
         target: Ground truth labels
         
     Returns:
-        Negative F1 score (for minimization)
+        F1 loss (for minimization)
     """
-    _, predicted = torch.max(output.data, 1)
+    _, predicted = torch.max(input.data, dim=1)
     predicted = predicted.cpu().numpy()
     target = target.cpu().numpy()
     
-    f1 = -f1_score(target, predicted, average='macro')
-    return torch.tensor(f1, device=output.device)
+    f1 = 1 - f1_score(target, predicted, average='macro')
+    return torch.tensor(f1, device=input.device)
 
-def accuracy(output: torch.Tensor, target: torch.Tensor, topk=(1,)):
+Averaging = Literal["macro", "micro", "weighted", "none"]
+
+class CombinedCEF1Loss(nn.Module):
+    """Combined loss function that combines CrossEntropy and F1 loss with configurable weights.
+    
+    Args:
+        ce_weight: Weight for CrossEntropy loss (default: 0.5)
+        f1_weight: Weight for F1 loss (default: 0.5)
+        f1_beta: Beta parameter for F1 loss (default: 1.0)
+        f1_average: Averaging method for F1 loss (default: 'macro')
+        f1_eps: Small epsilon for numerical stability (default: 1e-8)
+        normalize: Normalization method for losses ('none', 'log', 'minmax', 'zscore') (default: 'log')
+        num_classes: Number of classes for log normalization (default: 10)
+    """
+    def __init__(
+        self,
+        ce_weight: float = 0.5,
+        f1_weight: float = 0.5,
+        f1_beta: float = 1.0,
+        f1_temperature: float = 1.0,
+        f1_learnable_temperature: bool = False,
+        f1_average: Averaging = "macro",
+        f1_eps: float = 1e-8,
+        label_smoothing: float = 0.0,
+        normalize: str = "log",
+        num_classes: int = 10,
+    ):
+        super().__init__()
+        self.ce_weight = ce_weight
+        self.f1_weight = f1_weight
+        self.normalize = normalize
+        self.num_classes = num_classes
+        self.ce_loss = nn.CrossEntropyLoss()
+        self.f1_loss = SoftF1Loss(
+            beta=f1_beta,
+            temperature=f1_temperature,
+            average=f1_average,
+            eps=f1_eps,
+            from_logits=True,
+            learnable_temperature=f1_learnable_temperature,
+            label_smoothing=label_smoothing
+        )
+        
+        # For minmax normalization, we'll track running statistics
+        if normalize == "minmax":
+            self.register_buffer('ce_min', torch.tensor(float('inf')))
+            self.register_buffer('ce_max', torch.tensor(float('-inf')))
+            self.register_buffer('f1_min', torch.tensor(float('inf')))
+            self.register_buffer('f1_max', torch.tensor(float('-inf')))
+            self.register_buffer('update_count', torch.tensor(0))
+    
+    def _normalize_loss(self, ce_loss: torch.Tensor, f1_loss: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Normalize losses to make them comparable.
+        
+        Args:
+            ce_loss: CrossEntropy loss value
+            f1_loss: F1 loss value
+            
+        Returns:
+            Tuple of (normalized_ce_loss, normalized_f1_loss)
+        """
+        if self.normalize == "none":
+            return ce_loss, f1_loss
+        
+        elif self.normalize == "log":
+            # Normalize CE by log(num_classes) to roughly [0, 1] range
+            ce_norm = ce_loss / torch.log(torch.tensor(self.num_classes, dtype=ce_loss.dtype, device=ce_loss.device))
+            # F1 loss is already in [0, 1] range
+            f1_norm = f1_loss
+            return ce_norm, f1_norm
+        
+        elif self.normalize == "minmax":
+            # Update running statistics
+            with torch.no_grad():
+                self.ce_min = torch.min(self.ce_min, ce_loss)
+                self.ce_max = torch.max(self.ce_max, ce_loss)
+                self.f1_min = torch.min(self.f1_min, f1_loss)
+                self.f1_max = torch.max(self.f1_max, f1_loss)
+                self.update_count += 1
+            
+            # Normalize using current min/max
+            ce_range = self.ce_max - self.ce_min
+            f1_range = self.f1_max - self.f1_min
+            
+            # Avoid division by zero
+            ce_norm = (ce_loss - self.ce_min) / (ce_range + 1e-8)
+            f1_norm = (f1_loss - self.f1_min) / (f1_range + 1e-8)
+            
+            return ce_norm, f1_norm
+        
+        elif self.normalize == "zscore":
+            # For z-score normalization, we'd need running statistics
+            # This is a simplified version - in practice, you'd want to track running mean/std
+            ce_norm = ce_loss / (torch.log(torch.tensor(self.num_classes, dtype=ce_loss.dtype, device=ce_loss.device)) + 1e-8)
+            f1_norm = f1_loss
+            return ce_norm, f1_norm
+        
+        else:
+            raise ValueError(f"Unknown normalization method: {self.normalize}")
+    
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Compute combined loss.
+        
+        Args:
+            input: Model predictions (logits)
+            target: Ground truth labels
+            
+        Returns:
+            Combined loss value
+        """
+        ce_loss = self.ce_loss(input, target)
+        f1_loss = self.f1_loss(input, target)
+        
+        # Normalize losses if requested
+        ce_norm, f1_norm = self._normalize_loss(ce_loss, f1_loss)
+        
+        return self.ce_weight * ce_norm + self.f1_weight * f1_norm
+
+
+class SoftF1Loss(nn.Module):
+    """
+    Soft F1 loss using softmax probabilities.
+    - Supports multi-class classification.
+    - Computes macro-averaged (default) or micro-averaged soft-F1.
+    - Can be used as a loss (1 - F1) or as a direct F1 score.
+
+    Args:
+        average: 'macro' or 'micro'
+        eps: numerical stability
+        loss: if True -> returns loss = 1 - softF1, else returns softF1 score.
+        temperature: optional softmax temperature (T < 1 sharpens, T > 1 smooths)
+    """
+    def __init__(self, average='macro', eps=1e-8, loss=True, temperature=1.0):
+        super().__init__()
+        self.average = average
+        self.eps = eps
+        self.loss = loss
+        self.temperature = temperature
+
+    def forward(self, logits, targets):
+        """
+        logits: (N, C) raw output from model
+        targets: (N,) integer class labels 0..C-1
+        """
+        # Apply temperature-scaled softmax
+        probs = F.softmax(logits / self.temperature, dim=1)  # (N, C)
+
+        N, C = probs.shape
+        one_hot = F.one_hot(targets, num_classes=C).float()  # (N, C)
+
+        # Soft counts
+        tp = (probs * one_hot).sum(dim=0)        # (C,)
+        pred_pos = probs.sum(dim=0)              # (C,)
+        actual_pos = one_hot.sum(dim=0)          # (C,)
+
+        precision = tp / (pred_pos + self.eps)
+        recall = tp / (actual_pos + self.eps)
+
+        f1_per_class = 2 * precision * recall / (precision + recall + self.eps)
+
+        if self.average == 'macro':
+            f1 = f1_per_class.mean()
+        elif self.average == 'micro':
+            # compute micro precision/recall
+            tp_micro = tp.sum()
+            pred_pos_micro = pred_pos.sum()
+            actual_pos_micro = actual_pos.sum()
+            prec = tp_micro / (pred_pos_micro + self.eps)
+            rec = tp_micro / (actual_pos_micro + self.eps)
+            f1 = 2 * prec * rec / (prec + rec + self.eps)
+        else:
+            raise ValueError("average must be 'macro' or 'micro'")
+
+        if self.loss:
+            return 1.0 - f1  # minimize
+        else:
+            return f1       # maximize or monitor
+
+class SoftBetaF1Loss(nn.Module):
+    def __init__(
+        self,
+        beta: float = 1.0,
+        from_logits: bool = True,
+        multilabel: bool = False,
+        average: Averaging = "macro",
+        eps: float = 1e-8,
+        class_weights: Optional[torch.Tensor] = None,
+        reduction: Literal["mean", "sum", "none"] = "mean",
+        temperature: float = 1.0,
+        learnable_temperature: bool = False,
+        min_temperature: float = 1e-3,
+        max_temperature: float = 1e3,
+        label_smoothing: float = 0.0,
+    ):
+        """
+        temperature: initial temperature (applied as logits / temperature)
+        learnable_temperature: if True, temperature is a learnable scalar parameter
+        min_temperature/max_temperature: clamps learned temperature to this range
+        label_smoothing: label smoothing factor for better generalization
+        """
+        super().__init__()
+        assert beta > 0
+        assert average in ("macro", "micro", "weighted", "none")
+        assert reduction in ("mean", "sum", "none")
+        self.beta = float(beta)
+        self.from_logits = bool(from_logits)
+        self.multilabel = bool(multilabel)
+        self.average = average
+        self.eps = float(eps)
+        self.reduction = reduction
+        self.register_buffer("class_weights_buffer", None if class_weights is None else class_weights.clone().float())
+
+        # temperature handling
+        self.min_temperature = float(min_temperature)
+        self.max_temperature = float(max_temperature)
+        if learnable_temperature:
+            # store log-temperature to ensure positivity
+            self.log_temperature = nn.Parameter(torch.log(torch.tensor(float(temperature))))
+            self._learnable_temperature = True
+        else:
+            self.register_buffer("fixed_temperature", torch.tensor(float(temperature)))
+            self._learnable_temperature = False
+            
+        # Label smoothing parameter
+        self.label_smoothing = label_smoothing
+
+    def _get_temperature(self):
+        if self._learnable_temperature:
+            t = torch.exp(self.log_temperature)
+            # clamp for stability (in-place clamp risks gradient issues; use .clamp)
+            return t.clamp(min=self.min_temperature, max=self.max_temperature)
+        else:
+            return self.fixed_temperature
+
+    def _apply_label_smoothing(self, y: torch.Tensor) -> torch.Tensor:
+        """Apply label smoothing to targets."""
+        if self.label_smoothing <= 0.0:
+            return y
+            
+        n_classes = y.shape[1]
+        smooth_y = y * (1.0 - self.label_smoothing) + self.label_smoothing / n_classes
+        return smooth_y
+
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # apply temperature only if from_logits=True and temperature != 1
+        T = self._get_temperature()
+        if self.from_logits:
+            if T.item() != 1.0:
+                input = input / T
+
+            if self.multilabel:
+                probs = torch.sigmoid(input)
+            else:
+                probs = F.softmax(input, dim=1)
+        else:
+            probs = input.float()
+
+        # the rest is identical soft-F1 computation:
+        if probs.dim() == 1:
+            probs = probs.unsqueeze(1)
+        n_classes = probs.shape[1]
+
+        # prepare targets
+        if not self.multilabel:
+            if target.dim() == 1 or (target.dim() == 2 and target.shape[1] == 1):
+                if target.dim() == 2:
+                    target = target.squeeze(1)
+                y = F.one_hot(target.long(), num_classes=n_classes).float()
+            else:
+                y = target.float()
+        else:
+            y = target.float()
+
+        y = y.to(probs.dtype)
+        if y.shape != probs.shape:
+            raise ValueError(f"target shape {y.shape} != input/probs shape {probs.shape}")
+
+        # Apply label smoothing
+        y = self._apply_label_smoothing(y)
+
+        TP = (probs * y).sum(dim=0)
+        FP = (probs * (1 - y)).sum(dim=0)
+        FN = ((1 - probs) * y).sum(dim=0)
+
+        b2 = self.beta * self.beta
+        numer = (1.0 + b2) * TP
+        denom = (1.0 + b2) * TP + b2 * FN + FP
+        per_class_f = numer / (denom + self.eps)
+
+        if self.average == "micro":
+            TP_sum = TP.sum()
+            FP_sum = FP.sum()
+            FN_sum = FN.sum()
+            numer_m = (1.0 + b2) * TP_sum
+            denom_m = (1.0 + b2) * TP_sum + b2 * FN_sum + FP_sum
+            f_val = numer_m / (denom_m + self.eps)
+            final_f = f_val
+        else:
+            f = per_class_f
+            # class-weighting (provided or computed)
+            class_weights = self.class_weights_buffer
+            if class_weights is not None:
+                w = class_weights.to(probs.device).float()
+                if w.numel() != n_classes:
+                    raise ValueError("class_weights length mismatch")
+                final_f = (f * w).sum() / (w.sum() + self.eps)
+            elif self.average == "weighted":
+                support = target.sum(dim=0)
+                total_support = support.sum()
+                if total_support.item() == 0:
+                    final_f = f.mean()
+                else:
+                    weights = support / (total_support + self.eps)
+                    final_f = (f * weights).sum()
+            elif self.average == "none":
+                final_f = f
+            else:  # macro
+                final_f = f.mean()
+
+        loss = 1.0 - final_f
+
+        if self.average == "none":
+            if self.reduction == "none":
+                return loss
+            elif self.reduction == "sum":
+                return loss.sum()
+            else:
+                return loss.mean()
+        else:
+            if self.reduction == "none":
+                return loss
+            elif self.reduction == "sum":
+                return loss * 1.0
+            else:
+                return loss
+
+
+def accuracy(input: torch.Tensor, target: torch.Tensor, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""
     with torch.no_grad():
         maxk = max(topk)
         batch_size = target.size(0)
 
-        _, pred = output.topk(maxk, 1, True, True)
+        _, pred = input.topk(maxk, 1, True, True)
         pred = pred.t()
         correct = pred.eq(target.view(1, -1).expand_as(pred)).contiguous()
 
@@ -918,6 +1232,7 @@ def unfreeze_bn(model: nn.Module) -> None:
 
 def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0: np.ndarray, steps: int, args: argparse.Namespace) -> None:
     std_init = args.es_std
+    print(f"Total number of steps: {steps}")
             
     if strategy == 'CMA_ES':
         alpha = 1
@@ -931,7 +1246,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
         es_params = es.default_params.replace(
             std_init=std_init,
             std_min=1e-6, 
-            std_max=1e1
+            std_max=1e3
         )
         es_state = es.init(key=key, mean=x0, params=es_params)
     elif strategy == 'SV_CMA_ES':
@@ -941,13 +1256,15 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             solution=x0,
         )
         es_params = es.default_params.replace(std_init=std_init, std_min=1e-6, std_max=1e1)
-        means = np.random.normal(x0, std_init, (5, x0.shape[0]))
+        means = np.random.normal(x0, 0, (5, x0.shape[0]))
         es_state = es.init(key=key, means=means, params=es_params)
     elif strategy == 'SimpleES':
-        lr_schedule = optax.exponential_decay(
+        lr_schedule = optax.piecewise_constant_schedule(
             init_value=0.1,
-            transition_steps=steps,
-            decay_rate=0.1,
+            boundaries_and_scales={
+                steps // 160: 0.1,  # multiply by 0.1 at step 160
+                steps // 180: 0.1,  # multiply by 0.1 again at step 180
+            }
         )
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
@@ -959,56 +1276,80 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
         )
         es_state = es.init(key=key, mean=x0, params=es_params)
     elif strategy == 'Open_ES':
+        # For SGD optimizer
         lr_schedule = optax.cosine_decay_schedule(
             init_value=1e-3,
             decay_steps=steps,
             alpha=1e-2,
         )
+        lr_schedule = optax.piecewise_constant_schedule(
+            init_value=0.1,
+            boundaries_and_scales={
+                steps // 160: 0.1,  # multiply by 0.1 at step 160
+                steps // 180: 0.1,  # multiply by 0.1 again at step 180
+            }
+        )
         std_schedule = optax.cosine_decay_schedule(
             init_value=std_init,
             decay_steps=steps,
-            alpha=1e-2,
+            alpha=0.0,
         )
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
             solution=x0,
-            optimizer=optax.adam(learning_rate=lr_schedule),
+            optimizer=optax.sgd(learning_rate=0.1),
             std_schedule=std_schedule,
             use_antithetic_sampling=True,
         )
         es_params = es.default_params
         es_state = es.init(key=key, mean=x0, params=es_params)
     elif strategy == 'SV_Open_ES':
-        lr_schedule = optax.exponential_decay(
-            init_value=0.001,
-            transition_steps=steps * args.epochs,
-            decay_rate=0.2,
+        # For SGD optimizer
+        lr_schedule = optax.cosine_decay_schedule(
+            init_value=1e-3,
+            decay_steps=steps,
+            alpha=1e-2,
+        )
+        lr_schedule = optax.piecewise_constant_schedule(
+            init_value=0.1,
+            boundaries_and_scales={
+                steps // 160: 0.1,  # multiply by 0.1 at step 160
+                steps // 180: 0.1,  # multiply by 0.1 again at step 180
+            }
         )
         std_schedule = optax.cosine_decay_schedule(
             init_value=std_init,
-            decay_steps=steps * args.epochs,
-            alpha=1e-4,
+            decay_steps=steps,
+            alpha=0.0,
         )
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize//5, 
             num_populations=5,
             solution=x0,
-            optimizer=optax.sgd(learning_rate=0.001),
+            optimizer=optax.adam(learning_rate=0.001),
             std_schedule=std_schedule,
             use_antithetic_sampling=True,
         )
         es_params = es.default_params
         es_state = es.init(key=key, means=np.random.normal(x0, 0.1, (5, x0.shape[0])), params=es_params)
     elif strategy == 'xNES':
-        lr_schedule = optax.exponential_decay(
-            init_value=0.001,
-            transition_steps=steps,
-            decay_rate=0.1,
+        # For SGD optimizer
+        lr_schedule = optax.cosine_decay_schedule(
+            init_value=1e-3,
+            decay_steps=steps,
+            alpha=1e-2,
+        )
+        lr_schedule = optax.piecewise_constant_schedule(
+            init_value=0.1,
+            boundaries_and_scales={
+                steps // 160: 0.1,  # multiply by 0.1 at step 160
+                steps // 180: 0.1,  # multiply by 0.1 again at step 180
+            }
         )
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
             solution=x0,
-            optimizer=optax.sgd(learning_rate=0.001),
+            optimizer=optax.adam(learning_rate=0.001),
         )
         es_params = es.default_params
         es_params = es_params.replace(
@@ -1027,7 +1368,7 @@ def population_based_strategy_init(strategy: str, args: argparse.Namespace, x0: 
             # fitness_shaping_fn=centered_rank_fitness_shaping_fn,
         )
         es_params = es.default_params.replace(
-            elitism=True,
+            elitism=False,
             differential_weight=0.5,
             crossover_rate=0.9,
         )
@@ -1038,23 +1379,85 @@ def population_based_strategy_init(strategy: str, args: argparse.Namespace, x0: 
             # fitness_shaping_fn=centered_rank_fitness_shaping_fn,
         )
         es_params = es.default_params.replace(
-            inertia_coeff=0.729,
-            cognitive_coeff=1.49445,
-            social_coeff=1.49445,
+            inertia_coeff=0.5,           # Balanced exploration/exploitation
+            cognitive_coeff=1.5,         # Enhanced personal learning
+            social_coeff=1.5,          # Enhanced global learning
         )
     elif strategy == 'DiffusionEvolution':
         es = population_based_algorithms['DiffusionEvolution'](
             population_size=args.popsize, 
             solution=x0,
             num_generations=steps,
-            # num_latent_dims=2,
+            num_latent_dims=128,
+            # fitness_shaping_fn=centered_rank_fitness_shaping_fn,
+        )
+        es_params = es.default_params
+    elif strategy == 'GA':
+        std_schedule = optax.cosine_decay_schedule(
+            init_value=1.0,
+            decay_steps=steps,
+            alpha=0.0,
+        )
+        es = population_based_algorithms['SimpleGA'](
+            population_size=args.popsize, 
+            solution=x0,
+            std_schedule=std_schedule,
             # fitness_shaping_fn=centered_rank_fitness_shaping_fn,
         )
         es_params = es.default_params.replace(
-            std_m=0.01,
-            scale_factor=0.1,
+            crossover_rate=0.1,
         )
+    elif strategy == 'LGA':
+        es = population_based_algorithms['LGA'](
+            population_size=args.popsize, 
+            solution=x0,
+            # fitness_shaping_fn=centered_rank_fitness_shaping_fn,
+        )
+        es_params = es.default_params.replace(
+            crossover_rate=0.1,
+            std_init=1.0,
+        )
+    elif strategy == 'GESMR_GA':
+        es = population_based_algorithms['GESMR_GA'](
+            population_size=args.popsize, 
+            solution=x0,
+            num_groups=2,
+            # fitness_shaping_fn=centered_rank_fitness_shaping_fn,
+        )
+        es_params = es.default_params
+    elif strategy == 'MR15_GA':
+        es = population_based_algorithms['MR15_GA'](
+            population_size=args.popsize, 
+            solution=x0,
+            # fitness_shaping_fn=centered_rank_fitness_shaping_fn,
+        )
+        es_params = es.default_params
+    elif strategy == 'SAMR_GA':
+        es = population_based_algorithms['SAMR_GA'](
+            population_size=args.popsize, 
+            solution=x0,
+            # fitness_shaping_fn=centered_rank_fitness_shaping_fn,
+        )
+        es_params = es.default_params
     return es, es_params
+
+
+STRATEGY_TYPES = {
+    'cma_es': 'ES',
+    'sv_cma_es': 'ES',
+    'simplees': 'ES',
+    'open_es': 'ES',
+    'sv_open_es': 'ES',
+    'xnes': 'ES',
+    'de': 'EA',
+    'pso': 'EA',
+    'diffusionevolution': 'EA',
+    'ga': 'EA',
+    'lga': 'EA',
+    'gesmr_ga': 'EA',
+    'mr15_ga': 'EA',
+    'samr_ga': 'EA',
+}
 
 
 def fitness(z, model, base_params, decoder, batch, loss_fn, device, alpha):
@@ -1193,3 +1596,205 @@ def plot_param_distribution(x, save_path):
     plt.grid(True)
     plt.savefig(f"{save_path}")
     plt.close()
+
+
+def create_weight_sharing(model, args, optimizer_type=None):
+    """
+    Create a weight sharing instance based on the provided arguments.
+    
+    Args:
+        model: PyTorch model
+        args: Arguments object containing weight sharing configuration
+        optimizer_type: Optional optimizer type (for strategy-specific logic)
+        
+    Returns:
+        Weight sharing instance
+    """
+    from src.weight_sharing import (
+        HardWeightSharingCodebook,
+        RandomProjectionSoftSharing,
+        SparseProjection,
+        MLPSoftSharing,
+        HyperNetworkSoftSharing,
+        RandomFourierFeaturesSoftSharing
+    )
+    
+    param_sharing_type = args.ws.lower()
+    seed = args.seed if args.seed is not None else 0
+    
+    if param_sharing_type == 'hard':
+        ws = HardWeightSharingCodebook(
+            model=model, 
+            d=args.d, 
+            seed=seed, 
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'randproj':
+        normalize = args.normalize_projection
+        ws = RandomProjectionSoftSharing(
+            model=model, 
+            d=args.d, 
+            alpha=args.alpha, 
+            normalize=normalize, 
+            seed=seed,
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'sparseproj':
+        ws = SparseProjection(
+            model=model, 
+            d=args.d, 
+            alpha=args.alpha, 
+            seed=seed,
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'mlp':
+        hidden_dims = [int(dim) for dim in args.hidden_dims.split(',')]
+        activation = args.activation.lower() if args.activation else None
+        ws = MLPSoftSharing(
+            model=model, 
+            d=args.d, 
+            hidden_dims=hidden_dims, 
+            use_activation=args.use_activation, 
+            activation=activation, 
+            alpha=args.alpha, 
+            seed=seed,
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'hypernetwork':
+        ws = HyperNetworkSoftSharing(
+            model=model, 
+            d=args.d, 
+            alpha=args.alpha, 
+            seed=seed,
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'rff':
+        ws = RandomFourierFeaturesSoftSharing(
+            model=model, 
+            d=args.d, 
+            alpha=args.alpha, 
+            seed=seed,
+            device=args.ws_device
+        )
+    else:
+        raise ValueError(f"Unknown weight sharing type: {param_sharing_type}")
+    
+    return ws
+
+
+def create_criterion(args, num_classes):
+    """
+    Create a loss criterion and optionally a new train loader with weighted sampling.
+    
+    Args:
+        args: Arguments object containing criterion configuration
+        num_classes: Number of classes in the dataset
+        
+    Returns:
+        tuple: (criterion, train_loader or None)
+               Returns None for train_loader if no weighted sampling is needed
+    """
+    
+    criterion_type = args.criterion.lower()
+    
+    if criterion_type == 'ce':
+        criterion = torch.nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
+        
+    elif criterion_type == 'f1':
+        criterion = f1_loss
+        
+    elif criterion_type == 'soft_f1':
+        criterion = SoftF1Loss(
+            average="micro",
+            loss=True,
+            temperature=args.f1_temperature,
+        )
+        
+    elif criterion_type == 'ce_sf1':
+        criterion = CombinedCEF1Loss(
+            ce_weight=args.ce_weight,
+            f1_weight=args.f1_weight,
+            f1_beta=args.f1_beta,
+            f1_temperature=args.f1_temperature,
+            f1_learnable_temperature=args.f1_learnable_temperature,
+            label_smoothing=args.label_smoothing,
+            normalize=args.ce_normalize,
+            num_classes=num_classes
+        )
+        
+    else:
+        raise ValueError(f"Invalid criterion: {criterion_type}")
+    
+    return criterion
+
+
+
+def evaluate_model_on_batch(model, criterion, batch, device):
+    model.eval()
+    model = model.to(device)
+    try:
+        with torch.no_grad():
+            inputs, targets = batch[0].to(device), batch[1].to(device)
+            output = model(inputs)
+            loss = criterion(output, targets)
+        return loss.item()
+    except RuntimeError as e:
+        if "CUDA" in str(e):
+            # Clear CUDA cache and retry
+            torch.cuda.empty_cache()
+            print(f"CUDA error encountered, cleared cache: {e}")
+            return 1e6  # Return high loss value as fallback
+        else:
+            raise e
+
+def load_solution_to_model(z, ws, device):
+    try:
+        theta = ws(z)
+        if torch.cuda.is_available() and device == 'cuda':
+            theta = theta.to(device)
+        ws.load_to_model(theta)
+    except RuntimeError as e:
+        if "CUDA" in str(e):
+            torch.cuda.empty_cache()
+            print(f"CUDA error in load_solution_to_model, cleared cache: {e}")
+            # Retry once with cache cleared
+            theta = ws(z)
+            if torch.cuda.is_available() and device == 'cuda':
+                theta = theta.to(device)
+            ws.load_to_model(theta)
+        else:
+            raise e
+
+
+def evaluate_solution_on_batch(z, ws, criterion, batch, weight_decay=0, device='cuda'):
+    load_solution_to_model(z, ws, device)
+    fitness = evaluate_model_on_batch(model=ws.model, criterion=criterion, batch=batch, device=device)
+    theta = params_to_vector(ws.model.parameters(), to_numpy=True)
+    theta_norm = np.linalg.norm(theta)
+    fitness = fitness + weight_decay * theta_norm
+    return fitness
+
+
+def evaluate_population_on_batch(population, ws, criterion, batch, weight_decay=0, device='cuda'):
+    fitnesses = np.zeros(len(population))
+    for i, z in enumerate(population):
+        try:
+            load_solution_to_model(z, ws, device)
+            fitnesses[i] = evaluate_model_on_batch(model=ws.model, criterion=criterion, batch=batch, device=device)
+            theta = params_to_vector(ws.model.parameters(), to_numpy=True)
+            theta_norm = np.linalg.norm(theta)
+            fitnesses[i] = fitnesses[i] + weight_decay * theta_norm
+        except RuntimeError as e:
+            if "CUDA" in str(e):
+                # Clear CUDA cache and assign high fitness value
+                torch.cuda.empty_cache()
+                print(f"CUDA error in population evaluation {i}, cleared cache: {e}")
+                fitnesses[i] = 1e6  # High fitness value (bad for minimization)
+            else:
+                raise e
+        
+        # Clear cache periodically to prevent memory buildup
+        if (i + 1) % 10 == 0:
+            torch.cuda.empty_cache()
+    
+    return fitnesses
