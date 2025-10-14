@@ -1314,22 +1314,27 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
         es_state = es.init(key=key, mean=x0, params=es_params)
     elif strategy == 'Open_ES':
         # For SGD optimizer
+        # lr_schedule = optax.cosine_decay_schedule(
+        #     init_value=1e-3,
+        #     decay_steps=steps,
+        #     alpha=1e-2,
+        # )
+        # lr_schedule = optax.piecewise_constant_schedule(
+        #     init_value=args.es_lr,
+        #     boundaries_and_scales={
+        #         steps // 160: 0.1,  # multiply by 0.1 at step 160
+        #         steps // 180: 0.1,  # multiply by 0.1 again at step 180
+        #     }
+        # )
         lr_schedule = optax.cosine_decay_schedule(
-            init_value=1e-3,
-            decay_steps=steps,
-            alpha=1e-2,
-        )
-        lr_schedule = optax.piecewise_constant_schedule(
             init_value=args.es_lr,
-            boundaries_and_scales={
-                steps // 160: 0.1,  # multiply by 0.1 at step 160
-                steps // 180: 0.1,  # multiply by 0.1 again at step 180
-            }
+            decay_steps=steps,
+            alpha=1e-3,
         )
         std_schedule = optax.cosine_decay_schedule(
             init_value=std_init,
             decay_steps=steps,
-            alpha=0.0,
+            alpha=1e-2,
         )
         optimizer = None
         if args.es_optimizer == 'sgd':
