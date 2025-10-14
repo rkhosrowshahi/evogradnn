@@ -332,7 +332,7 @@ def main(args):
             tags=[args.arch, args.dataset, args.optimizer, args.ws, args.bus, optimizer_type]
         )
 
-    # Evaluate args.bus as initial random parameters theta_0
+    # Evaluate theta_base as initial random parameters theta_0
     theta_base = theta_0.clone()
     ws.load_to_model(theta_base)
     theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1 = evaluate_model_on_test(model=ws.model, 
@@ -512,7 +512,7 @@ def main(args):
         if not args.disable_wandb:
             wandb.log(log_dict, step=step)
 
-        print(f"Epoch {epoch}, args.bus test loss: {theta_base_test_ce:.3f}, args.bus test top1: {theta_base_test_top1:.3f}, theta_t test loss: {theta_t_test_ce:.3f}, theta_t test top1: {theta_t_test_top1:.3f}")
+        print(f"Epoch {epoch}, theta_base test loss: {theta_base_test_ce:.3f}, theta_base test top1: {theta_base_test_top1:.3f}, theta_t test loss: {theta_t_test_ce:.3f}, theta_t test top1: {theta_t_test_top1:.3f}")
 
         if best_acc < test_top1:
             best_acc = test_top1
