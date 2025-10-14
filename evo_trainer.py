@@ -263,8 +263,10 @@ def main(args):
     if optimizer_type == 'EA':
         optimizer, optimizer_params = population_based_strategy_init(strategy=args.optimizer, args=args, x0=x0, steps=len(train_loader) * args.epochs)
         # Initialize population state
-        # init_population = np.random.normal(x0, args.ea_std, size=(args.popsize, d))
-        init_population = np.random.uniform(-args.ea_std, args.ea_std, size=(args.popsize, d))
+        if 'GA' in args.optimizer.lower():
+            init_population = np.random.normal(x0, args.ea_std, size=(args.popsize, d))
+        else:
+            init_population = np.random.uniform(-args.ea_std, args.ea_std, size=(args.popsize, d))
         init_population[0] = x0.copy()
         init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
         optimizer_state = optimizer.init(key=key, population=init_population, fitness=init_fitness, params=optimizer_params)

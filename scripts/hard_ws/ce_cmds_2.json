@@ -5,7 +5,7 @@
   "commands": [
     {
       "name": "Seed 1",
-      "command": "python evo_trainer.py --seed 1 --dataset cifar10 --sampler inverse --arch lenet --optimizer GA --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
+      "command": "python evo_trainer.py --seed 1 --dataset cifar10 --sampler inverse --arch lenet --optimizer GA --d 128 --popsize 32 --epochs 200 --ea_std 0.01 --bus none --criterion ce --ws hard --wd 5e-4"
     },
     {
       "name": "Seed 22",
@@ -13,7 +13,7 @@
     },
     {
       "name": "Seed 22",
-      "command": "python evo_trainer.py --seed 22 --dataset cifar10 --sampler inverse --arch lenet --optimizer GA --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
+      "command": "python evo_trainer.py --seed 22 --dataset cifar10 --sampler inverse --arch lenet --optimizer GA --d 128 --popsize 32 --epochs 200 --ea_std 0.01 --bus none --criterion ce --ws hard --wd 5e-4"
     },
     {
       "name": "Seed 22",
@@ -25,7 +25,7 @@
     },
     {
       "name": "Seed 333",
-      "command": "python evo_trainer.py --seed 333 --dataset cifar10 --sampler inverse --arch lenet --optimizer GA --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
+      "command": "python evo_trainer.py --seed 333 --dataset cifar10 --sampler inverse --arch lenet --optimizer GA --d 128 --popsize 32 --epochs 200 --ea_std 0.01 --bus none --criterion ce --ws hard --wd 5e-4"
     },
     {
       "name": "Seed 333",
