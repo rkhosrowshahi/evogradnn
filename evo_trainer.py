@@ -311,6 +311,8 @@ def main(args):
             'popsize': args.popsize,
             'ea_std': args.ea_std if optimizer_type == 'EA' else None,
             'es_std': args.es_std if optimizer_type == 'ES' else None,
+            'es_optimizer': args.es_optimizer,
+            'es_lr': args.es_lr,
             'lr': args.lr,
             'lr_scheduler': args.lr_scheduler,
             'lr_scheduler_step_size': args.lr_scheduler_step_size,
