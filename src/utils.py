@@ -1458,9 +1458,6 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             std_schedule=std_schedule,
         )
         es_params = es.default_params
-        es_params = es_params.replace(
-            std_init=std_init,
-        )
         es_state = es.init(key=key, mean=x0, params=es_params)
     elif strategy == 'NoiseReuseES':
         std_schedule = optax.cosine_decay_schedule(
@@ -1486,9 +1483,6 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             optimizer=optimizer,
         )
         es_params = es.default_params
-        es_params = es_params.replace(
-            std_init=std_init,
-        )
         es_state = es.init(key=key, mean=x0, params=es_params)
     print(f"ES parameters: {es_params}")
     return es, es_params, es_state
