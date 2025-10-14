@@ -1290,10 +1290,10 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
         es_state = es.init(key=key, means=means, params=es_params)
     elif strategy == 'SimpleES':
         lr_schedule = optax.piecewise_constant_schedule(
-            init_value=0.1,
+            init_value=args.es_lr,
             boundaries_and_scales={
-                steps // 160: 0.1,  # multiply by 0.1 at step 160
-                steps // 180: 0.1,  # multiply by 0.1 again at step 180
+                steps // 160: args.es_lr,  # multiply by 0.1 at step 160
+                steps // 180: args.es_lr,  # multiply by 0.1 again at step 180
             }
         )
         es = distribution_based_algorithms[strategy](
@@ -1313,7 +1313,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             alpha=1e-2,
         )
         lr_schedule = optax.piecewise_constant_schedule(
-            init_value=0.1,
+            init_value=args.es_lr,
             boundaries_and_scales={
                 steps // 160: 0.1,  # multiply by 0.1 at step 160
                 steps // 180: 0.1,  # multiply by 0.1 again at step 180
@@ -1327,7 +1327,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
             solution=x0,
-            optimizer=optax.sgd(learning_rate=0.1),
+            optimizer=optax.sgd(learning_rate=args.es_lr),
             std_schedule=std_schedule,
             use_antithetic_sampling=True,
         )
@@ -1341,10 +1341,10 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             alpha=1e-2,
         )
         lr_schedule = optax.piecewise_constant_schedule(
-            init_value=0.1,
+            init_value=args.es_lr,
             boundaries_and_scales={
-                steps // 160: 0.1,  # multiply by 0.1 at step 160
-                steps // 180: 0.1,  # multiply by 0.1 again at step 180
+                steps // 160: args.es_lr,  # multiply by 0.1 at step 160
+                steps // 180: args.es_lr,  # multiply by 0.1 again at step 180
             }
         )
         std_schedule = optax.cosine_decay_schedule(
@@ -1356,7 +1356,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             population_size=args.popsize//5, 
             num_populations=5,
             solution=x0,
-            optimizer=optax.adam(learning_rate=0.001),
+            optimizer=optax.sgd(learning_rate=lr_schedule),
             std_schedule=std_schedule,
             use_antithetic_sampling=True,
         )
@@ -1370,7 +1370,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             alpha=1e-2,
         )
         lr_schedule = optax.piecewise_constant_schedule(
-            init_value=0.1,
+            init_value=args.es_lr,
             boundaries_and_scales={
                 steps // 160: 0.1,  # multiply by 0.1 at step 160
                 steps // 180: 0.1,  # multiply by 0.1 again at step 180
@@ -1379,7 +1379,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
             solution=x0,
-            optimizer=optax.adam(learning_rate=0.001),
+            optimizer=optax.sgd(learning_rate=lr_schedule),
         )
         es_params = es.default_params
         es_params = es_params.replace(
@@ -1434,17 +1434,24 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             std_init=std_init,
         )
         es_state = es.init(key=key, mean=x0, params=es_params)
-    elif strategy == 'iAMaLGaM_Full':
+    elif strategy == 'NoiseReuseES':
         std_schedule = optax.cosine_decay_schedule(
             init_value=args.es_std,
             decay_steps=steps,
             alpha=1e-2,
         )
-        args.popsize = np.floor(10 * np.sqrt(args.popsize))
+        lr_schedule = optax.piecewise_constant_schedule(
+            init_value=args.es_lr,
+            boundaries_and_scales={
+                steps // 160: 0.1,  # multiply by 0.1 at step 160
+                steps // 180: 0.1,  # multiply by 0.1 again at step 180
+            }
+        )
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
             solution=x0,
             std_schedule=std_schedule,
+            optimizer=optax.sgd(learning_rate=lr_schedule),
         )
         es_params = es.default_params
         es_params = es_params.replace(
@@ -1556,6 +1563,8 @@ STRATEGY_TYPES = {
     'evotf_es': 'ES',
     'les': 'ES',
     'pgpe': 'ES',
+    'iamalgam_full': 'ES',
+    'noisereusees': 'ES',
 }
 
 
