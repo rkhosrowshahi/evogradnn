@@ -620,6 +620,9 @@ if __name__ == "__main__":
                        help='Standard deviation for ES noise generation (used when strategy=es)')
     parser.add_argument('--es_lr', type=float, default=1.0,
                        help='Learning rate for ES optimizer')
+    parser.add_argument('--es_optimizer', type=str, default='sgd',
+                       choices=['sgd', 'adam'],
+                       help='Mean (mu) vector optimizer (updater) in ES optimizer')
     
     # ============================================================================
     # Weight Sharing Configuration

@@ -1296,6 +1296,13 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
                 steps // 180: args.es_lr,  # multiply by 0.1 again at step 180
             }
         )
+        optimizer = None
+        if args.es_optimizer == 'sgd':
+            optimizer = optax.sgd(learning_rate=lr_schedule)
+        elif args.es_optimizer == 'adam':
+            optimizer = optax.adam(learning_rate=lr_schedule)
+        else:
+            raise ValueError(f"Invalid optimizer: {args.es_optimizer}")
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
             solution=x0,
@@ -1324,10 +1331,17 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             decay_steps=steps,
             alpha=0.0,
         )
+        optimizer = None
+        if args.es_optimizer == 'sgd':
+            optimizer = optax.sgd(learning_rate=lr_schedule)
+        elif args.es_optimizer == 'adam':
+            optimizer = optax.adam(learning_rate=lr_schedule)
+        else:
+            raise ValueError(f"Invalid optimizer: {args.es_optimizer}")
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
             solution=x0,
-            optimizer=optax.sgd(learning_rate=args.es_lr),
+            optimizer=optimizer,
             std_schedule=std_schedule,
             use_antithetic_sampling=True,
         )
@@ -1352,11 +1366,18 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             decay_steps=steps,
             alpha=0.0,
         )
+        optimizer = None
+        if args.es_optimizer == 'sgd':
+            optimizer = optax.sgd(learning_rate=lr_schedule)
+        elif args.es_optimizer == 'adam':
+            optimizer = optax.adam(learning_rate=lr_schedule)
+        else:
+            raise ValueError(f"Invalid optimizer: {args.es_optimizer}")
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize//5, 
             num_populations=5,
             solution=x0,
-            optimizer=optax.sgd(learning_rate=lr_schedule),
+            optimizer=optimizer,
             std_schedule=std_schedule,
             use_antithetic_sampling=True,
         )
@@ -1376,10 +1397,17 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
                 steps // 180: 0.1,  # multiply by 0.1 again at step 180
             }
         )
+        optimizer = None
+        if args.es_optimizer == 'sgd':
+            optimizer = optax.sgd(learning_rate=lr_schedule)
+        elif args.es_optimizer == 'adam':
+            optimizer = optax.adam(learning_rate=lr_schedule)
+        else:
+            raise ValueError(f"Invalid optimizer: {args.es_optimizer}")
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
             solution=x0,
-            optimizer=optax.sgd(learning_rate=lr_schedule),
+            optimizer=optimizer,
         )
         es_params = es.default_params
         es_params = es_params.replace(
@@ -1447,11 +1475,15 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
                 steps // 180: 0.1,  # multiply by 0.1 again at step 180
             }
         )
+        if args.es_optimizer == 'sgd':
+            optimizer = optax.sgd(learning_rate=lr_schedule)
+        elif args.es_optimizer == 'adam':
+            optimizer = optax.adam(learning_rate=lr_schedule)
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
             solution=x0,
             std_schedule=std_schedule,
-            optimizer=optax.sgd(learning_rate=lr_schedule),
+            optimizer=optimizer,
         )
         es_params = es.default_params
         es_params = es_params.replace(
