@@ -1451,7 +1451,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             decay_steps=steps,
             alpha=1e-2,
         )
-        args.popsize = np.floor(10 * np.sqrt(args.popsize))
+        args.popsize = int(np.floor(10 * np.sqrt(args.popsize)))
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize, 
             solution=x0,
