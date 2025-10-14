@@ -1386,6 +1386,72 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             std_init=std_init,
         )
         es_state = es.init(key=key, mean=x0, params=es_params)
+
+    elif strategy == 'EvoTF_ES':
+        es = distribution_based_algorithms[strategy](
+            population_size=args.popsize, 
+            solution=x0
+        )
+        es_params = es.default_params
+        es_params = es_params.replace(
+            std_init=std_init,
+        )
+        es_state = es.init(key=key, mean=x0, params=es_params)
+    elif strategy == 'LES':
+        es = distribution_based_algorithms[strategy](
+            population_size=args.popsize, 
+            solution=x0
+        )
+        es_params = es.default_params
+        es_params = es_params.replace(
+            std_init=std_init,
+        )
+        es_state = es.init(key=key, mean=x0, params=es_params)
+    elif strategy == 'PGPE':
+        es = distribution_based_algorithms[strategy](
+            population_size=args.popsize, 
+            solution=x0
+        )
+        es_params = es.default_params
+        es_params = es_params.replace(
+            std_init=std_init,
+        )
+        es_state = es.init(key=key, mean=x0, params=es_params)
+    elif strategy == 'iAMaLGaM_Full':
+        std_schedule = optax.cosine_decay_schedule(
+            init_value=args.es_std,
+            decay_steps=steps,
+            alpha=1e-2,
+        )
+        args.popsize = np.floor(10 * np.sqrt(args.popsize))
+        es = distribution_based_algorithms[strategy](
+            population_size=args.popsize, 
+            solution=x0,
+            std_schedule=std_schedule,
+        )
+        es_params = es.default_params
+        es_params = es_params.replace(
+            std_init=std_init,
+        )
+        es_state = es.init(key=key, mean=x0, params=es_params)
+    elif strategy == 'iAMaLGaM_Full':
+        std_schedule = optax.cosine_decay_schedule(
+            init_value=args.es_std,
+            decay_steps=steps,
+            alpha=1e-2,
+        )
+        args.popsize = np.floor(10 * np.sqrt(args.popsize))
+        es = distribution_based_algorithms[strategy](
+            population_size=args.popsize, 
+            solution=x0,
+            std_schedule=std_schedule,
+        )
+        es_params = es.default_params
+        es_params = es_params.replace(
+            std_init=std_init,
+        )
+        es_state = es.init(key=key, mean=x0, params=es_params)
+    print(f"ES parameters: {es_params}")
     return es, es_params, es_state
 
 
@@ -1487,6 +1553,9 @@ STRATEGY_TYPES = {
     'gesmr_ga': 'EA',
     'mr15_ga': 'EA',
     'samr_ga': 'EA',
+    'evotf_es': 'ES',
+    'les': 'ES',
+    'pgpe': 'ES',
 }
 
 
