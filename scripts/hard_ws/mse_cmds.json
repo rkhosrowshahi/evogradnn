@@ -6,7 +6,7 @@
 
       {
         "name": "SimpleES",
-        "command": "python evo_trainer.py --dataset cifar10 --sampler inverse --arch lenet --optimizer DE --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --anchor fixed --criterion ce --ws hard --wd 5e-4"
+        "command": "python evo_trainer.py --dataset cifar10 --sampler inverse --arch lenet --optimizer DE --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --bus none --criterion mse --ws hard --wd 5e-4"
       }
     ]
   }

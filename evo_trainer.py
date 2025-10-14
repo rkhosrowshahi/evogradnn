@@ -66,7 +66,7 @@ def ea_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
         # Extract signal from ES exploration
         mean_z = optimizer.get_population(state=optimizer_state).mean(axis=0)
 
-        if args.anchor.lower() == 'ema_in_es_loop':
+        if args.bus.lower() == 'ema_in_es_loop':
             theta_base = ws.theta_base.clone()
             load_solution_to_model(mean_z, ws, device)
             theta_zt = params_to_vector(ws.model.parameters())
@@ -160,7 +160,7 @@ def es_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
         if args.optimizer.lower() == 'sv_cma_es' or args.optimizer.lower() == 'sv_open_es':
             mean_z = np.array(mean_z.mean(axis=0))
 
-        if args.anchor.lower() == 'ema_in_es_loop':
+        if args.bus.lower() == 'ema_in_es_loop':
             theta_base = ws.theta_base.clone()
             load_solution_to_model(mean_z, ws, device)
             theta_zt = params_to_vector(ws.model.parameters())
@@ -194,7 +194,6 @@ def es_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
         if (count_batch - 1) % period == 0 or count_batch == num_batches or count_batch == 1 or count_batch == 0:
             mean_loss_meter.update(evaluate_solution_on_batch(z=mean_z, ws=ws, criterion=criterion, batch=batch, device=device))
             log_dict = {
-                'Train/epoch': epoch,
                 'Evolution/es_sigma': np.mean(optimizer_state.std),
                 'Evolution/pop_best_loss': pop_best_loss_meter.avg,
                 'Evolution/pop_avg_loss': pop_avg_loss_meter.avg,
@@ -294,7 +293,7 @@ def main(args):
             'optimizer': args.optimizer,
             'weight_sharing': args.ws,
             'normalize_projection': args.normalize_projection,
-            'anchor': args.anchor,
+            'base_update_strategy': args.bus,
             'criterion': args.criterion,
             'f1_temperature': args.f1_temperature,
             'f1_learnable_temperature': args.f1_learnable_temperature,
@@ -327,13 +326,13 @@ def main(args):
         run_name = args.wandb_name if args.wandb_name else f"{timestamp}"
         
         wandb.init(
-            project=f"{args.wandb_project}-{args.dataset}-{args.arch}",
+            project=f"{args.wandb_project}-{args.dataset}-{args.arch}-v2",
             name=run_name,
             config=config,
-            tags=[args.arch, args.dataset, args.optimizer, args.ws, args.anchor, optimizer_type]
+            tags=[args.arch, args.dataset, args.optimizer, args.ws, args.bus, optimizer_type]
         )
 
-    # Evaluate anchor as initial random parameters theta_0
+    # Evaluate args.bus as initial random parameters theta_0
     theta_base = theta_0.clone()
     ws.load_to_model(theta_base)
     theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1 = evaluate_model_on_test(model=ws.model, 
@@ -383,7 +382,7 @@ def main(args):
         print(f"delta at epoch {epoch}: {delta[:5]}")
         test_ce, test_top1, test_top5, test_f1 = 0, 0, 0, 0
         
-        if args.anchor.lower() == 'full':
+        if args.bus.lower() == 'full':
             theta_base = theta_t.clone()
             ws.load_to_model(theta_base)
             (theta_base_test_ce, 
@@ -403,7 +402,7 @@ def main(args):
             elif optimizer_type == 'ES':  # ES
                 optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
                 
-        elif args.anchor.lower() == 'ema':
+        elif args.bus.lower() == 'ema':
             theta_base = theta_base + lr * delta
             ws.load_to_model(theta_base)
             (theta_base_test_ce, 
@@ -423,7 +422,7 @@ def main(args):
             elif optimizer_type == 'ES':  # ES
                 optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
                 
-        elif args.anchor.lower() == 'ema_with_momentum':
+        elif args.bus.lower() == 'ema_with_momentum':
             velocity = args.momentum * velocity + (1 - args.momentum) * delta
             theta_base = theta_base + lr * velocity
             ws.load_to_model(theta_base)
@@ -444,7 +443,7 @@ def main(args):
             elif optimizer_type == 'ES':  # ES
                 optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
                 
-        elif args.anchor.lower() == 'ema_with_init_optimizer_state_and_update_mean':
+        elif args.bus.lower() == 'ema_with_init_optimizer_state_and_update_mean':
             theta_base = theta_base + lr * delta
             ws.load_to_model(theta_base)
             (theta_base_test_ce, 
@@ -476,7 +475,7 @@ def main(args):
             except Exception as e:
                 print(f"Skipping Δz mean-translation due to error: {e}")
                 
-        elif args.anchor.lower() == 'fixed':
+        elif args.bus.lower() == 'none':
             test_ce, test_top1, test_top5, test_f1 = theta_t_test_ce, theta_t_test_top1, theta_t_test_top5, theta_t_test_f1
         else:
             theta_base = ws.theta_base
@@ -493,25 +492,27 @@ def main(args):
         print(f"theta_base at epoch {epoch}: {theta_base[:5]}")
 
         log_dict = {
+                     'Epoch': epoch,
                      'Train/lr': lr,
-                     'Test/loss': test_ce,
+                     'Train/epoch': epoch,
+                     'Test/ce': test_ce,
                      'Test/top1': test_top1,
                      'Test/top5': test_top5,
                      'Test/f1': test_f1,
-                     'Test/theta_t_loss': theta_t_test_ce,
+                     'Test/theta_t_ce': theta_t_test_ce,
                      'Test/theta_t_top1': theta_t_test_top1,
                      'Test/theta_t_top5': theta_t_test_top5,
                      'Test/theta_t_f1': theta_t_test_f1,
-                     'Test/anchor_loss': theta_base_test_ce,
-                     'Test/anchor_top1': theta_base_test_top1,
-                     'Test/anchor_top5': theta_base_test_top5,
-                     'Test/anchor_f1': theta_base_test_f1,
+                     'Test/theta_base_ce': theta_base_test_ce,
+                     'Test/theta_base_top1': theta_base_test_top1,
+                     'Test/theta_base_top5': theta_base_test_top5,
+                     'Test/theta_base_f1': theta_base_test_f1,
                      'Evolution/delta_norm': delta_norm,
             }
         if not args.disable_wandb:
             wandb.log(log_dict, step=step)
 
-        print(f"Epoch {epoch}, anchor test loss: {theta_base_test_ce:.3f}, anchor test top1: {theta_base_test_top1:.3f}, theta_t test loss: {theta_t_test_ce:.3f}, theta_t test top1: {theta_t_test_top1:.3f}")
+        print(f"Epoch {epoch}, args.bus test loss: {theta_base_test_ce:.3f}, args.bus test top1: {theta_base_test_top1:.3f}, theta_t test loss: {theta_t_test_ce:.3f}, theta_t test top1: {theta_t_test_top1:.3f}")
 
         if best_acc < test_top1:
             best_acc = test_top1
@@ -532,7 +533,7 @@ def main(args):
     print(f"Saved final checkpoint to {os.path.join(save_path, 'checkpoints', f'final_checkpoint.pth.tar')}")
     log_dict = {
         'Final/test_top1': best_acc,
-        'Final/test_loss': best_loss,
+        'Final/test_ce': best_loss,
     }
     if not args.disable_wandb:
         wandb.log(log_dict, step=step)
@@ -558,7 +559,7 @@ if __name__ == "__main__":
                        help='Validation split for training')
     parser.add_argument('--sampler', type=str, default=None,
                        help='Sampler for training')
-    parser.add_argument('--criterion', type=str, default='ce', choices=['ce', 'f1', 'soft_f1', 'ce_sf1'],
+    parser.add_argument('--criterion', type=str, default='ce', choices=['ce', 'mse', 'f1', 'soft_f1', 'ce_sf1'],
                        help='Loss function: ce (cross-entropy), f1 (F1 score), soft_f1 (soft F1), or ce_sf1 (CE + soft F1)')
     
     # ============================================================================
@@ -621,8 +622,8 @@ if __name__ == "__main__":
     # ============================================================================
     parser.add_argument('--ws', "--weight_sharing", type=str, default='randproj',
                        help='Weight sharing strategy (e.g., randproj, mlp, hard)')
-    parser.add_argument('--anchor', type=str, default='fixed',
-                       help='Anchor strategy for weight sharing: fixed, full, ema, ema_with_momentum, ema_with_init_optimizer_state_and_update_mean, or ema_in_es_loop')
+    parser.add_argument('--bus', type=str, default='none',
+                       help='Base update strategy (BUS) for weight sharing: none, full, ema, ema_with_momentum, ema_with_init_optimizer_state_and_update_mean, or ema_in_es_loop')
     parser.add_argument('--alpha', type=float, default=1.0,
                        help='Scaling factor for random projection weight sharing')
     parser.add_argument('--normalize_projection', action='store_true',

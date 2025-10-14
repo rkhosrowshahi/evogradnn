@@ -767,6 +767,36 @@ def sgd_finetune(
         optimizer.step()
         countfe += 1
 
+def mse_softmax_loss(input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Calculate MSE loss between target class probability and 1.
+    
+    Args:
+        input: Model output logits [batch_size, num_classes]
+        target: Ground truth labels [batch_size]
+        
+    Returns:
+        MSE loss: mean((p_target - 1)^2) where p_target is the probability of the correct class
+        
+    Note:
+        This computes MSE only for the target class probability, not all classes.
+        - Perfect prediction (p_target=1.0): loss = 0.0
+        - Random prediction (p_target=0.1 for 10 classes): loss = 0.81
+        - Wrong prediction (p_target=0.0): loss = 1.0
+        Dynamic range: [0.0, 1.0] - much better than full MSE's [0.0, 0.18]
+    """
+    # Apply softmax to logits
+    softmax_output = F.softmax(input, dim=1)
+    
+    # Gather the probabilities of the target classes
+    # softmax_output[i, target[i]] for each i in batch
+    batch_size = input.shape[0]
+    target_probs = softmax_output[torch.arange(batch_size), target]
+    
+    # Compute MSE between target probabilities and 1
+    mse = F.mse_loss(target_probs, torch.ones_like(target_probs))
+    return mse
+
+
 def f1_loss(input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """Calculate F1 loss for model output.
     
@@ -1380,8 +1410,8 @@ def population_based_strategy_init(strategy: str, args: argparse.Namespace, x0: 
         )
         es_params = es.default_params.replace(
             inertia_coeff=0.5,           # Balanced exploration/exploitation
-            cognitive_coeff=1.5,         # Enhanced personal learning
-            social_coeff=1.5,          # Enhanced global learning
+            cognitive_coeff=1.0,         # Enhanced personal learning
+            social_coeff=0.1,          # Enhanced global learning
         )
     elif strategy == 'DiffusionEvolution':
         es = population_based_algorithms['DiffusionEvolution'](
@@ -1702,6 +1732,9 @@ def create_criterion(args, num_classes):
         
     elif criterion_type == 'f1':
         criterion = f1_loss
+        
+    elif criterion_type == 'mse':
+        criterion = mse_softmax_loss
         
     elif criterion_type == 'soft_f1':
         criterion = SoftF1Loss(
