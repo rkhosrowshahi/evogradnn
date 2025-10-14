@@ -1,36 +1,19 @@
 {
-    "description": "Distribution-based Optimizers Sweep with Fixed Anchor",
-    "default_timeout": null,
-    "stop_on_error": true,
-    "commands": [
-
-      {
-        "name": "Seed 1",
-        "command": "python evo_trainer.py --dataset cifar10 --sampler inverse --arch lenet --optimizer GA --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
-      },
-      {
-        "name": "Seed 12",
-        "command": "python evo_trainer.py --dataset cifar10 --sampler inverse --arch lenet --optimizer DE --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
-      },
-      {
-        "name": "Seed 12",
-        "command": "python evo_trainer.py --dataset cifar10 --sampler inverse --arch lenet --optimizer GA --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
-      },
-      {
-        "name": "Seed 12",
-        "command": "python evo_trainer.py --dataset cifar10 --sampler inverse --arch lenet --optimizer CMA_ES --d 128 --popsize 32 --epochs 200 --es_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
-      },
-      {
-        "name": "Seed 123",
-        "command": "python evo_trainer.py --dataset cifar10 --sampler inverse --arch lenet --optimizer DE --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
-      },
-      {
-        "name": "Seed 123",
-        "command": "python evo_trainer.py --dataset cifar10 --sampler inverse --arch lenet --optimizer GA --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
-      },
-      {
-        "name": "Seed 123",
-        "command": "python evo_trainer.py --dataset cifar10 --sampler inverse --arch lenet --optimizer CMA_ES --d 128 --popsize 32 --epochs 200 --es_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
-      }
-    ]
-  }
+  "description": "",
+  "default_timeout": null,
+  "stop_on_error": true,
+  "commands": [
+    {
+      "name": "Seed 22",
+      "command": "python evo_trainer.py --seed 22 --dataset cifar10 --sampler inverse --arch lenet --optimizer DE --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
+    },
+    {
+      "name": "Seed 22",
+      "command": "python evo_trainer.py --seed 22 --dataset cifar10 --sampler inverse --arch lenet --optimizer GA --d 128 --popsize 32 --epochs 200 --ea_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
+    },
+    {
+      "name": "Seed 22",
+      "command": "python evo_trainer.py --seed 22 --dataset cifar10 --sampler inverse --arch lenet --optimizer CMA_ES --d 128 --popsize 32 --epochs 200 --es_std 0.1 --bus none --criterion ce --ws hard --wd 5e-4"
+    }
+  ]
+}

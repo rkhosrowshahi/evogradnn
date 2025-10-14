@@ -1424,9 +1424,9 @@ def population_based_strategy_init(strategy: str, args: argparse.Namespace, x0: 
         es_params = es.default_params
     elif strategy == 'GA':
         std_schedule = optax.cosine_decay_schedule(
-            init_value=1.0,
+            init_value=args.ea_std,
             decay_steps=steps,
-            alpha=0.0,
+            alpha=1e-3,
         )
         es = population_based_algorithms['SimpleGA'](
             population_size=args.popsize, 
