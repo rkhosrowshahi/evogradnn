@@ -278,14 +278,17 @@ def main(args):
         optimizer, optimizer_params, optimizer_state = distribution_based_strategy_init(key=key, strategy=args.optimizer, x0=x0, steps=args.inner_steps * len(train_loader) * args.epochs, args=args)
         train_epoch_fn = es_train_epoch
 
-    if args.lr_scheduler.lower() == 'cosine':
-        scheduler = CosineAnnealingLRScheduler(eta_max=args.lr, eta_min=1e-4, T_max=args.epochs, T_mult=1)
-    elif args.lr_scheduler.lower() == 'step':
-        scheduler = StepLRScheduler(args.lr, args.lr_scheduler_step_size, args.lr_scheduler_gamma)
-    elif args.lr_scheduler.lower() == 'multi_step':
-        scheduler = MultiStepLRScheduler(args.lr, args.lr_scheduler_milestones, args.lr_scheduler_gamma)
-    elif args.lr_scheduler.lower() == 'constant':
-        scheduler = ConstantLRScheduler(args.lr)
+    if args.lr_scheduler is not None:   
+        if args.lr_scheduler.lower() == 'cosine':
+            scheduler = CosineAnnealingLRScheduler(eta_max=args.lr, eta_min=1e-4, T_max=args.epochs, T_mult=1)
+        elif args.lr_scheduler.lower() == 'step':
+            scheduler = StepLRScheduler(args.lr, args.lr_scheduler_step_size, args.lr_scheduler_gamma)
+        elif args.lr_scheduler.lower() == 'multi_step':
+            scheduler = MultiStepLRScheduler(args.lr, args.lr_scheduler_milestones, args.lr_scheduler_gamma)
+        elif args.lr_scheduler.lower() == 'constant':
+            scheduler = ConstantLRScheduler(args.lr)
+    else:
+        scheduler = None
 
     # Initialize wandb
     if not args.disable_wandb:
@@ -359,8 +362,10 @@ def main(args):
     best_acc, best_loss = 0.0, 0.0
     epoch = 1
     step = 1
+    lr = 1.0
     while epoch <=  args.epochs:
-        lr = scheduler.get_lr()
+        if scheduler is not None:
+            lr = scheduler.get_lr()
         if epoch <= 1:
             lr = 1.0 # warmup
 
@@ -571,7 +576,8 @@ def main(args):
 
         epoch += 1
 
-        scheduler.step()
+        if scheduler is not None:
+            scheduler.step()
     
     torch.save({
                 'state_dict': model.state_dict()

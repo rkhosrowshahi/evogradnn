@@ -1,0 +1,32 @@
+{
+  "description": "",
+  "default_timeout": null,
+  "stop_on_error": true,
+  "commands": [
+
+    {
+      "name": "Seed 1",
+      "command": "python evo_trainer.py --seed 1 --dataset cifar10 --sampler inverse --arch lenet --optimizer Open_ES --d 128 --popsize 32 --epochs 200 --es_std 0.1 --es_optimizer adam --es_lr 0.001 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+    },
+    {
+      "name": "Seed 1",
+      "command": "python evo_trainer.py --seed 1 --dataset cifar10 --sampler inverse --arch lenet --optimizer CMA_ES --d 128 --popsize 32 --epochs 200 --es_std 1.0 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+    },
+    {
+      "name": "Seed 22",
+      "command": "python evo_trainer.py --seed 22 --dataset cifar10 --sampler inverse --arch lenet --optimizer CMA_ES --d 128 --popsize 32 --epochs 200 --es_std 1.0 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+    },
+    {
+      "name": "Seed 22",
+      "command": "python evo_trainer.py --seed 22 --dataset cifar10 --sampler inverse --arch lenet --optimizer Open_ES --d 128 --popsize 32 --epochs 200 --es_std 0.1 --es_optimizer adam --es_lr 0.001 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+    },
+    {
+      "name": "Seed 333",
+      "command": "python evo_trainer.py --seed 333 --dataset cifar10 --sampler inverse --arch lenet --optimizer CMA_ES --d 128 --popsize 32 --epochs 200 --es_std 1.0 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+    },
+    {
+      "name": "Seed 333",
+      "command": "python evo_trainer.py --seed 333 --dataset cifar10 --sampler inverse --arch lenet --optimizer Open_ES --d 128 --popsize 32 --epochs 200 --es_std 0.1 --es_optimizer adam --es_lr 0.001 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+    }
+  ]
+}
