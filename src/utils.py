@@ -1503,8 +1503,8 @@ def population_based_strategy_init(strategy: str, args: argparse.Namespace, x0: 
         )
         es_params = es.default_params.replace(
             elitism=False,
-            differential_weight=0.5,
-            crossover_rate=0.9,
+            differential_weight=args.de_mr,
+            crossover_rate=args.de_cr,
         )
     elif strategy == 'PSO':
         es = population_based_algorithms['PSO'](
@@ -1513,9 +1513,9 @@ def population_based_strategy_init(strategy: str, args: argparse.Namespace, x0: 
             # fitness_shaping_fn=centered_rank_fitness_shaping_fn,
         )
         es_params = es.default_params.replace(
-            inertia_coeff=0.5,           # Balanced exploration/exploitation
-            cognitive_coeff=1.0,         # Enhanced personal learning
-            social_coeff=0.1,          # Enhanced global learning
+            inertia_coeff=args.pso_w,           # Balanced exploration/exploitation
+            cognitive_coeff=args.pso_c1,         # Enhanced personal learning
+            social_coeff=args.pso_c2,          # Enhanced global learning
         )
     elif strategy == 'DiffusionEvolution':
         es = population_based_algorithms['DiffusionEvolution'](
@@ -1528,7 +1528,7 @@ def population_based_strategy_init(strategy: str, args: argparse.Namespace, x0: 
         es_params = es.default_params
     elif strategy == 'GA':
         std_schedule = optax.cosine_decay_schedule(
-            init_value=args.ea_std,
+            init_value=args.ga_std,
             decay_steps=steps,
             alpha=1e-3,
         )
@@ -1539,7 +1539,7 @@ def population_based_strategy_init(strategy: str, args: argparse.Namespace, x0: 
             # fitness_shaping_fn=centered_rank_fitness_shaping_fn,
         )
         es_params = es.default_params.replace(
-            crossover_rate=0.1,
+            crossover_rate=args.ga_cr,
         )
     elif strategy == 'LGA':
         es = population_based_algorithms['LGA'](
@@ -1548,7 +1548,7 @@ def population_based_strategy_init(strategy: str, args: argparse.Namespace, x0: 
             # fitness_shaping_fn=centered_rank_fitness_shaping_fn,
         )
         es_params = es.default_params.replace(
-            crossover_rate=0.1,
+            crossover_rate=args.ga_cr,
             std_init=1.0,
         )
     elif strategy == 'GESMR_GA':

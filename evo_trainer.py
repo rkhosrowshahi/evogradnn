@@ -264,10 +264,12 @@ def main(args):
     if optimizer_type == 'EA':
         optimizer, optimizer_params = population_based_strategy_init(strategy=args.optimizer, args=args, x0=x0, steps=len(train_loader) * args.epochs)
         # Initialize population state
-        if 'GA' in args.optimizer.lower():
-            init_population = np.random.normal(x0, args.ea_std, size=(args.popsize, d))
+        if args.pop_init == 'normal':
+            init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+        elif args.pop_init == 'uniform':
+            init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
         else:
-            init_population = np.random.uniform(-args.ea_std, args.ea_std, size=(args.popsize, d))
+            raise ValueError(f"Invalid initial distribution: {args.pop_init}")
         init_population[0] = x0.copy()
         init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
         optimizer_state = optimizer.init(key=key, population=init_population, fitness=init_fitness, params=optimizer_params)
@@ -310,8 +312,15 @@ def main(args):
             'inner_steps': args.inner_steps,
             'dimensions': args.d,
             'popsize': args.popsize,
-            'ea_std': args.ea_std if optimizer_type == 'EA' else None,
-            'es_std': args.es_std if optimizer_type == 'ES' else None,
+            'pop_init_bound': args.pop_init_bound,
+            'ga_std': args.ga_std,
+            'ga_cr': args.ga_cr,
+            'de_mr': args.de_mr,
+            'de_cr': args.de_cr,
+            'pso_w': args.pso_w,
+            'pso_c1': args.pso_c1,
+            'pso_c2': args.pso_c2,
+            'es_std': args.es_std,
             'es_optimizer': args.es_optimizer,
             'es_lr': args.es_lr,
             'lr': args.lr,
@@ -402,8 +411,16 @@ def main(args):
             ws.init()
             
             if optimizer_type == 'EA':
-                init_population = np.random.normal(x0, args.ea_std, size=(args.popsize, d))
-                optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
+                # Initialize population state
+                if args.pop_init == 'normal':
+                    init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+                elif args.pop_init == 'uniform':
+                    init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                else:
+                    raise ValueError(f"Invalid initial distribution: {args.pop_init}")
+                init_population[0] = x0.copy()
+                init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
+                optimizer_state = optimizer.init(key=key, population=init_population, fitness=init_fitness, params=optimizer_params)
             elif optimizer_type == 'ES':  # ES
                 optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
                 
@@ -422,7 +439,15 @@ def main(args):
             ws.init()
             
             if optimizer_type == 'EA':
-                init_population = np.random.normal(x0, args.ea_std, size=(args.popsize, d))
+                # Initialize population state
+                if args.pop_init == 'normal':
+                    init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+                elif args.pop_init == 'uniform':
+                    init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                else:
+                    raise ValueError(f"Invalid initial distribution: {args.pop_init}")
+                init_population[0] = x0.copy()
+                init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
                 optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
             elif optimizer_type == 'ES':  # ES
                 optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
@@ -443,7 +468,15 @@ def main(args):
             ws.init()
             
             if optimizer_type == 'EA':
-                init_population = np.random.normal(x0, args.ea_std, size=(args.popsize, d))
+                # Initialize population state
+                if args.pop_init == 'normal':
+                    init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+                elif args.pop_init == 'uniform':
+                    init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                else:
+                    raise ValueError(f"Invalid initial distribution: {args.pop_init}")
+                init_population[0] = x0.copy()
+                init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
                 optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
             elif optimizer_type == 'ES':  # ES
                 optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
@@ -473,7 +506,15 @@ def main(args):
                     delta_z_np = delta_z_t.detach().cpu().numpy()
                     
                     if optimizer_type == 'EA':
-                        init_population = np.random.normal(x0, args.ea_std, size=(args.popsize, d))
+                        # Initialize population state
+                        if args.pop_init == 'normal':
+                            init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+                        elif args.pop_init == 'uniform':
+                            init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                        else:
+                            raise ValueError(f"Invalid initial distribution: {args.pop_init}")
+                        init_population[0] = x0.copy()
+                        init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
                         optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
                     elif optimizer_type == 'ES':  # ES
                         optimizer_state = optimizer.init(key=key, mean=zt + delta_z_np, params=optimizer_params)
@@ -555,9 +596,9 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=None,
                        help='Random seed for reproducibility (None for random seed)')
     parser.add_argument('--arch', type=str, default='resnet32',
-                       help='Neural network architecture to use (e.g., resnet32, vgg16)')
+                       help='Neural network architecture to use (e.g., resnet32, vgg16)', required=True)
     parser.add_argument('--dataset', type=str, default='cifar10',
-                       help='Dataset to train on (e.g., cifar10, cifar100, mnist)')
+                       help='Dataset to train on (e.g., cifar10, cifar100, mnist)', required=True)
     parser.add_argument('--batch_size', type=int, default=256,
                        help='Batch size for training')
     parser.add_argument('--val_split', type=float, default=0.01,
@@ -570,60 +611,77 @@ if __name__ == "__main__":
     # ============================================================================
     # Training Hyperparameters
     # ============================================================================
-    parser.add_argument('--epochs', type=int, default=50,
-                       help='Number of training epochs')
-    parser.add_argument('--f1_temperature', '--temperature', type=float, default=1.0,
+    parser.add_argument('--epochs', type=int, default=200,
+                       help='Number of training epochs', required=True)
+    parser.add_argument('--f1_temperature', '--temperature', type=float, default=None,
                        help='Temperature for soft F1 score error')
-    parser.add_argument('--f1_beta', type=float, default=0.0,
+    parser.add_argument('--f1_beta', type=float, default=None,
                        help='Beta for soft F1 score error')
     parser.add_argument('--f1_learnable_temperature', type=bool, default=False,
                        help='Learnable temperature for soft F1 score error')
-    parser.add_argument('--ce_weight', type=float, default=0.5,
+    parser.add_argument('--ce_weight', type=float, default=None,
                        help='Weight for CrossEntropy loss in combined loss (default: 0.5)')
-    parser.add_argument('--ce_normalize', type=str, default='none', choices=['none', 'log', 'minmax', 'zscore'],
+    parser.add_argument('--ce_normalize', type=str, default=None, choices=['none', 'log', 'minmax', 'zscore'],
                        help='Normalization method for CrossEntropy loss')
-    parser.add_argument('--f1_weight', type=float, default=0.5,
+    parser.add_argument('--f1_weight', type=float, default=None,
                        help='Weight for F1 loss in combined loss (default: 0.5)')
-    parser.add_argument('--label_smoothing', type=float, default=0.0,
+    parser.add_argument('--label_smoothing', type=float, default=None,
                        help='Label smoothing for soft F1 score error, use 0.1 for CIFAR-10 and 0.05 for CIFAR-100 datasets')
 
     # ============================================================================
     # Optimizer and Learning Rate Configuration
     # ============================================================================
-    parser.add_argument('--lr', "--learning_rate", type=float, default=1.0,
+    parser.add_argument('--lr', "--learning_rate", type=float, default=None,
                        help='Initial learning rate')
-    parser.add_argument('--lr_scheduler', type=str, default='constant', 
+    parser.add_argument('--lr_scheduler', type=str, default=None, 
                        choices=['cosine', 'step', 'multi_step', 'constant'],
                        help='Learning rate scheduler type')
-    parser.add_argument('--lr_scheduler_step_size', type=int, default=10,
+    parser.add_argument('--lr_scheduler_step_size', type=int, default=None,
                        help='Step size for step scheduler')
-    parser.add_argument('--lr_scheduler_gamma', type=float, default=0.1,
+    parser.add_argument('--lr_scheduler_gamma', type=float, default=None,
                        help='Gamma (decay factor) for step/multi_step schedulers')
     parser.add_argument('--lr_scheduler_milestones', type=str, default=None,
                        help='Milestones for multi_step lr scheduler (comma-separated)')
     parser.add_argument('--wd', "--weight_decay", type=float, default=5e-4,
                        help='Weight decay (L2 regularization) coefficient')
-    parser.add_argument('--momentum', type=float, default=0.9,
+    parser.add_argument('--momentum', type=float, default=None,
                        help='Momentum factor for SGD optimizer')
     
     # ============================================================================
     # Evolutionary Strategy Configuration
     # ============================================================================
-    parser.add_argument('--optimizer', type=str, default='PSO',
-                       help='Evolutionary optimizer to use (EA: PSO, etc. | ES: CMA_ES, SV_CMA_ES, SimpleES, Open_ES, SV_Open_ES, xNES)')
+    parser.add_argument('--optimizer', type=str, default=None,
+                       help='Evolutionary optimizer to use (EA: PSO, etc. | ES: CMA_ES, SV_CMA_ES, SimpleES, Open_ES, SV_Open_ES, xNES)', required=True)
     parser.add_argument('--inner_steps', type=int, default=1,
                        help='Number of inner optimization steps per iteration')
     parser.add_argument('--d', "--dimensions", type=int, default=128,
-                       help='Dimensionality of the search space')
-    parser.add_argument('--popsize', type=int, default=50,
+                       help='Dimensionality of the search space', required=True)
+    parser.add_argument('--popsize', type=int, default=64,
                        help='Population size for evolutionary strategy')
-    parser.add_argument('--ea_std', type=float, default=1.0,
-                       help='Standard deviation for EA noise generation (used when strategy=ea)')
-    parser.add_argument('--es_std', type=float, default=0.1,
+    parser.add_argument('--pop_init', type=str, default=None,
+                       choices=['normal', 'uniform'],
+                       help='Initial distribution for EA optimizer')
+    parser.add_argument('--pop_init_bound', type=float, default=None,
+                       help='Initial bound for EA optimizer')
+    parser.add_argument('--de_cr', type=float, default=None,
+                       help='Crossover rate for DE optimizer')
+    parser.add_argument('--de_mr', type=int, default=None,
+                       help='Mutation rate for DE optimizer')
+    parser.add_argument('--ga_cr', type=float, default=None,
+                       help='Crossover rate for GA optimizer')
+    parser.add_argument('--ga_std', type=float, default=None,
+                       help='Standard deviation for GA noise generation (used when strategy=ga)')
+    parser.add_argument('--pso_w', type=float, default=None,
+                       help='Inertia coefficient for PSO optimizer')
+    parser.add_argument('--pso_c1', type=float, default=None,
+                       help='Cognitive coefficient for PSO optimizer')
+    parser.add_argument('--pso_c2', type=float, default=None,
+                       help='Social coefficient for PSO optimizer')
+    parser.add_argument('--es_std', type=float, default=None,
                        help='Standard deviation for ES noise generation (used when strategy=es)')
-    parser.add_argument('--es_lr', type=float, default=1.0,
+    parser.add_argument('--es_lr', type=float, default=None,
                        help='Learning rate for ES optimizer')
-    parser.add_argument('--es_optimizer', type=str, default='none',
+    parser.add_argument('--es_optimizer', type=str, default=None,
                        choices=['sgd', 'adam', 'none'],
                        help='Mean (mu) vector optimizer (updater) in ES optimizer')
     
@@ -631,10 +689,10 @@ if __name__ == "__main__":
     # Weight Sharing Configuration
     # ============================================================================
     parser.add_argument('--ws', "--weight_sharing", type=str, default='randproj',
-                       help='Weight sharing strategy (e.g., randproj, mlp, hard)')
+                       help='Weight sharing strategy (e.g., randproj, mlp, hard)', required=True)
     parser.add_argument('--bus', type=str, default='none',
                        help='Base update strategy (BUS) for weight sharing: none, full, ema, ema_with_momentum, ema_with_init_optimizer_state_and_update_mean, or ema_in_es_loop')
-    parser.add_argument('--alpha', type=float, default=1.0,
+    parser.add_argument('--alpha', type=float, default=None,
                        help='Scaling factor for random projection weight sharing')
     parser.add_argument('--normalize_projection', action='store_true',
                        help='Normalize projection matrix for random projection weight sharing')
