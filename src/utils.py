@@ -176,16 +176,7 @@ def create_dataset(args, validation_split: float = 0.1) -> Tuple[Subset, Subset,
             num_samples=len(sample_weights),
             replacement=True
         )
-    if args.sampler == 'inverse':
-        sampler = create_inverse_balanced_loader()
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            sampler=sampler,
-            pin_memory=False,
-            num_workers=0
-        )
-    else:
+    if args.sampler is None:
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
@@ -193,6 +184,26 @@ def create_dataset(args, validation_split: float = 0.1) -> Tuple[Subset, Subset,
             pin_memory=False,
             num_workers=0
         )
+    else:
+        if args.sampler == 'inverse':
+            sampler = create_inverse_balanced_loader()
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=batch_size,
+                sampler=sampler,
+                pin_memory=False,
+                num_workers=0
+            )
+        elif args.sampler == 'random':
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=batch_size,
+                shuffle=True,
+                pin_memory=False,
+                num_workers=0
+            )
+        else:
+            raise ValueError(f"Invalid sampler: {args.sampler}")
     
     val_loader = DataLoader(
         val_dataset,
@@ -1753,6 +1764,8 @@ def create_criterion(args, num_classes):
     criterion_type = args.criterion.lower()
     
     if criterion_type == 'ce':
+        if args.label_smoothing is None:
+            args.label_smoothing = 0.0
         criterion = torch.nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
         
     elif criterion_type == 'f1':
@@ -1762,6 +1775,8 @@ def create_criterion(args, num_classes):
         criterion = mse_softmax_loss
         
     elif criterion_type == 'soft_f1':
+        if args.f1_temperature is None:
+            args.f1_temperature = 1.0
         criterion = SoftF1Loss(
             average="micro",
             loss=True,
@@ -1769,6 +1784,21 @@ def create_criterion(args, num_classes):
         )
         
     elif criterion_type == 'ce_sf1':
+        if args.ce_weight is None:
+            args.ce_weight = 0.5
+        if args.f1_weight is None:
+            args.f1_weight = 0.5
+        if args.f1_beta is None:
+            args.f1_beta = 1.0
+        if args.f1_temperature is None:
+            args.f1_temperature = 1.0
+        if args.f1_learnable_temperature is None:
+            args.f1_learnable_temperature = False
+        if args.ce_normalize is None:
+            args.ce_normalize = 'log'
+        if args.label_smoothing is None:
+            args.label_smoothing = 0.0
+            
         criterion = CombinedCEF1Loss(
             ce_weight=args.ce_weight,
             f1_weight=args.f1_weight,
