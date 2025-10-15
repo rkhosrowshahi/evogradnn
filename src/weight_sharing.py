@@ -652,24 +652,15 @@ class FastfoodProjection(ParameterSharing):
         return self.theta_base + x
 
 
-class HardWeightSharingCodebook(ParameterSharing):
+class HardWeightSharing(ParameterSharing):
     """
-    Hard weight sharing using a learnable codebook.
-    
-    This class implements hard parameter sharing where parameters are quantized to
-    discrete codes from a learnable codebook. Each parameter position is assigned
-    to one of K codebook entries, and the full parameter vector is reconstructed
-    by looking up these assignments in the codebook.
-    
-    The mapping is: theta[i] = codebook[assignments[i]] for all i
-    
     Args:
         model: PyTorch model
-        d: Number of codebook entries (latent dimension)
+        d: Number of blocks (latent dimension)
         seed: Random seed for reproducible assignment generation
         alpha: Scaling factor for parameters
         device: Device for computations
-        assignment_strategy: How to initialize assignments ('random', 'kmeans', 'uniform')
+        assignment_strategy: How to initialize assignments ('random', 'uniform')
     """
     
     def __init__(self, model: torch.nn.Module, d: int, seed: int = 0,
@@ -680,36 +671,18 @@ class HardWeightSharingCodebook(ParameterSharing):
         
         self._init_assignments()
         
-        print(self.get_codebook_usage())
+        print(self.count_block_sizes())
     
     def _init_assignments(self) -> None:
-        """Initialize parameter assignments to codebook entries."""
+        """Initialize parameter assignments to blocks."""
         if self.assignment_strategy == 'random':
             # Random assignment with seed
             generator = torch.Generator(device=self.device)
             generator.manual_seed(self.seed)
             assignments = torch.randint(0, self.d, (self.D,), device=self.device, generator=generator)
         elif self.assignment_strategy == 'uniform':
-            # Uniform distribution across codebook
+            # Uniform distribution across blocks
             assignments = torch.arange(self.D, device=self.device) % self.d
-        elif self.assignment_strategy == 'kmeans':
-            # Use k-means clustering on current parameters
-            try:
-                from sklearn.cluster import KMeans
-                params_np = self.theta_base.detach().cpu().numpy().reshape(-1, 1)
-                kmeans = KMeans(n_clusters=self.d, random_state=self.seed, n_init=10)
-                assignments = kmeans.fit_predict(params_np)
-                assignments = torch.from_numpy(assignments).to(self.device)
-                
-                # Initialize codebook with cluster centers
-                centers = torch.from_numpy(kmeans.cluster_centers_.flatten()).float()
-                with torch.no_grad():
-                    self.codebook.data.copy_(centers.to(self.device))
-            except ImportError:
-                print("sklearn not available, falling back to random assignment")
-                generator = torch.Generator(device=self.device)
-                generator.manual_seed(self.seed)
-                assignments = torch.randint(0, self.d, (self.D,), device=self.device, generator=generator)
         else:
             raise ValueError(f"Unknown assignment strategy: {self.assignment_strategy}")
         
@@ -718,32 +691,308 @@ class HardWeightSharingCodebook(ParameterSharing):
     
     def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
         """
-        Map latent vector (codebook) to full parameter space using hard assignment.
+        Map latent vector (blocks) to full parameter space using hard assignment.
         
         Args:
-            z: Codebook vector of shape (d,) - these become the codebook entries
+            z: Blocks vector of shape (d,) - these become the blocks
             
         Returns:
             Full parameter tensor of shape (D,) where each position gets the value
-            from the corresponding codebook entry: theta[i] = z[assignments[i]]
+            from the corresponding block: theta[i] = z[assignments[i]]
         """
         z = self._to_tensor(z)
         
-        # Use the input z as the codebook values and look up based on assignments
+        # Use the input z as the blocks values and look up based on assignments
         x = z[self.assignments]
         x = self.process(x)
         return self.theta_base + x
     
-    def get_codebook_usage(self) -> torch.Tensor:
-        """Return how many parameters are assigned to each codebook entry."""
+    def count_block_sizes(self) -> torch.Tensor:
+        """Return how many parameters are assigned to each block."""
         usage = torch.zeros(self.d, device=self.device)
         for i in range(self.d):
             usage[i] = (self.assignments == i).sum()
         return usage
     
     def get_compression_ratio(self) -> float:
-        """Return the compression ratio achieved by the codebook."""
+        """Return the compression ratio achieved by the blocks."""
         return self.D / self.d
+
+
+class LayerwiseHardWeightSharing(ParameterSharing):
+    """
+    Layerwise Hard Weight Sharing: Each layer has its own set of blocks.
+    
+    Unlike HardWeightSharing where all parameters share d blocks, this class
+    organizes blocks by layer. Each weight layer gets k blocks, and parameters within
+    a layer can only be assigned to that layer's blocks.
+    
+    For bias parameters, the number of blocks is adaptively set to min(k, bias_size)
+    to avoid having more blocks than parameters (which would be wasteful).
+    
+    Total number of blocks = sum of blocks across all layers, where:
+    - Weight layers get k blocks each
+    - Bias layers get min(k, bias_size) blocks each
+    
+    Args:
+        model: PyTorch model
+        d: Number of blocks per weight layer (k)
+        seed: Random seed for reproducible assignment generation
+        alpha: Scaling factor for parameters
+        device: Device for computations
+        assignment_strategy: How to initialize assignments within each layer ('random', 'uniform')
+    """
+    
+    def __init__(self, model: torch.nn.Module, d: int, seed: int = 0,
+                 alpha: float = 1.0, device: str = 'cuda', 
+                 assignment_strategy: str = 'random') -> None:
+
+        super().__init__(model, d, alpha, device, seed)
+        
+        self.k = d  # Blocks per layer
+        self.assignment_strategy = assignment_strategy
+        
+        # Extract layer information
+        self._extract_layer_info()
+        
+        # # Update total number of blocks
+        # self.d = self.k * self.num_layers
+        
+        # Initialize layer-wise assignments
+        self._init_layerwise_assignments()
+        
+        print(f"LayerwiseHardWeightSharing initialized:")
+        print(f"  - Number of layers: {self.num_layers}")
+        print(f"  - Blocks per layer (k): {self.k}")
+        print(f"  - Total blocks (d): {self.d}")
+        print(f"  - Total parameters (D): {self.D}")
+        print(f"  - Layers info: {self.layer_info}")
+        print(f"  - Compression ratio: {self.get_compression_ratio():.2f}")
+        print(self.count_block_sizes())
+    
+    def _extract_layer_info(self) -> None:
+        """Extract layer boundaries and information from the model."""
+        self.layer_boundaries = []  # List of (start_idx, end_idx) for each layer
+        self.layer_sizes = []  # Number of parameters in each layer
+        self.layer_blocks = []  # Number of blocks for each layer
+        self.layer_info = {}  # Layer information
+        
+        start_idx = 0
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                layer_size = param.numel()
+                end_idx = start_idx + layer_size
+                
+                # For bias parameters, use min(k, bias_size) blocks to avoid having more blocks than parameters
+                is_bias = 'bias' in name
+                num_blocks = min(self.k, layer_size) if is_bias else self.k
+                
+                self.layer_boundaries.append((start_idx, end_idx))
+                self.layer_sizes.append(layer_size)
+                self.layer_blocks.append(num_blocks)
+                self.layer_info[name] = {'size': layer_size, 'blocks': num_blocks, 'is_bias': is_bias}
+                
+                start_idx = end_idx
+        
+        self.num_layers = len(self.layer_boundaries)
+        # Total blocks = sum of blocks across all layers (not just k * num_layers)
+        self.d = sum(self.layer_blocks)
+        
+    def _init_layerwise_assignments(self) -> None:
+        """Initialize parameter assignments to layer-specific blocks."""
+        assignments = torch.zeros(self.D, dtype=torch.long, device=self.device)
+        
+        generator = torch.Generator(device=self.device)
+        generator.manual_seed(self.seed)
+        
+        # Calculate cumulative block indices for each layer
+        block_offsets = [0]
+        for num_blocks in self.layer_blocks:
+            block_offsets.append(block_offsets[-1] + num_blocks)
+        
+        for layer_idx, (start, end) in enumerate(self.layer_boundaries):
+            layer_size = end - start
+            num_layer_blocks = self.layer_blocks[layer_idx]
+            
+            # Block indices for this layer
+            layer_block_start = block_offsets[layer_idx]
+            layer_block_end = block_offsets[layer_idx + 1]
+            
+            if self.assignment_strategy == 'random':
+                # Random assignment within layer's blocks
+                layer_assignments = torch.randint(
+                    layer_block_start, 
+                    layer_block_end, 
+                    (layer_size,), 
+                    device=self.device, 
+                    generator=generator
+                )
+            elif self.assignment_strategy == 'uniform':
+                # Uniform distribution across layer's blocks
+                layer_assignments = torch.arange(layer_size, device=self.device) % num_layer_blocks
+                layer_assignments += layer_block_start
+            else:
+                raise ValueError(f"Unknown assignment strategy: {self.assignment_strategy}")
+            
+            assignments[start:end] = layer_assignments
+        
+        # Store block offsets for later use
+        self.register_buffer('block_offsets', torch.tensor(block_offsets, device=self.device))
+        # Store assignments as buffer (non-learnable)
+        self.register_buffer('assignments', assignments)
+        
+        # Recalculate d based on actually used blocks (important for random assignment)
+        self._recalculate_d_from_assignments()
+    
+    def _recalculate_d_from_assignments(self) -> None:
+        """
+        Recalculate self.d based on unique blocks actually used in assignments.
+        
+        With random assignment, some blocks may not be assigned to any parameters.
+        This method counts unique blocks per layer, remaps assignments to be contiguous,
+        and updates self.d to reflect the actual latent space dimensionality.
+        """
+        new_assignments = torch.zeros_like(self.assignments)
+        new_layer_blocks = []
+        new_block_offsets = [0]
+        global_block_idx = 0
+        
+        for layer_idx, (start, end) in enumerate(self.layer_boundaries):
+            # Get assignments for this layer
+            layer_assignments = self.assignments[start:end]
+            
+            # Find unique blocks used in this layer
+            unique_blocks = torch.unique(layer_assignments)
+            num_unique = len(unique_blocks)
+            
+            # Create mapping from old block indices to new contiguous indices
+            old_to_new = {}
+            for new_idx, old_block in enumerate(unique_blocks):
+                old_to_new[old_block.item()] = global_block_idx + new_idx
+            
+            # Remap assignments for this layer
+            for i in range(start, end):
+                old_block = self.assignments[i].item()
+                new_assignments[i] = old_to_new[old_block]
+            
+            # Update tracking
+            new_layer_blocks.append(num_unique)
+            global_block_idx += num_unique
+            new_block_offsets.append(global_block_idx)
+            
+            # Update layer_info with actual blocks used
+            layer_name = list(self.layer_info.keys())[layer_idx]
+            old_blocks = self.layer_info[layer_name]['blocks']
+            self.layer_info[layer_name]['blocks'] = num_unique
+            
+            if num_unique < old_blocks:
+                print(f"  Layer '{layer_name}': {old_blocks} blocks allocated, {num_unique} actually used")
+        
+        # Update all relevant attributes
+        old_d = self.d
+        self.d = global_block_idx
+        self.layer_blocks = new_layer_blocks
+        self.assignments = new_assignments
+        self.register_buffer('block_offsets', torch.tensor(new_block_offsets, device=self.device))
+        
+        if self.d < old_d:
+            print(f"  Total blocks reduced from {old_d} to {self.d} (removed {old_d - self.d} unused blocks)")
+    
+    def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """
+        Map latent vector (blocks) to full parameter space using layerwise hard assignment.
+        
+        Args:
+            z: Blocks vector of shape (d,) where d = sum of blocks across all layers.
+               The blocks are organized sequentially by layer:
+               - First num_blocks[0] elements are blocks for layer 0
+               - Next num_blocks[1] elements are blocks for layer 1
+               - etc.
+               For weight layers: num_blocks = k
+               For bias layers: num_blocks = min(k, bias_size)
+            
+        Returns:
+            Full parameter tensor of shape (D,) where each position gets the value
+            from its assigned block: theta[i] = z[assignments[i]]
+        """
+        z = self._to_tensor(z)
+        
+        # Validate input dimension
+        if z.shape[0] != self.d:
+            raise ValueError(f"Expected latent vector of size {self.d}, got {z.shape[0]}")
+        
+        # Use the input z as the blocks values and look up based on assignments
+        x = z[self.assignments]
+        x = self.process(x)
+        return self.theta_base + x
+    
+    def count_block_sizes(self) -> dict:
+        """Return how many parameters are assigned to each block, organized by layer."""
+        block_usage = {}
+        
+        for layer_idx, (layer_name, layer_data) in enumerate(self.layer_info.items()):
+            num_layer_blocks = self.layer_blocks[layer_idx]
+            layer_start_block = self.block_offsets[layer_idx].item()
+            layer_end_block = self.block_offsets[layer_idx + 1].item()
+            
+            layer_usage = torch.zeros(num_layer_blocks, device=self.device)
+            for local_block_idx in range(num_layer_blocks):
+                global_block_idx = layer_start_block + local_block_idx
+                layer_usage[local_block_idx] = (self.assignments == global_block_idx).sum()
+            
+            block_usage[layer_name] = layer_usage.cpu().numpy()
+        
+        return block_usage
+    
+    def get_compression_ratio(self) -> float:
+        """Return the compression ratio achieved by the blocks."""
+        return self.D / self.d
+    
+    def get_layer_info(self) -> dict:
+        """Return detailed information about layer structure."""
+        info = {
+            'num_layers': self.num_layers,
+            'blocks_per_layer_k': self.k,  # Target blocks per weight layer
+            'total_blocks': self.d,
+            'total_parameters': self.D,
+            'compression_ratio': self.get_compression_ratio(),
+            'layers': []
+        }
+        
+        for layer_idx, (start, end) in enumerate(self.layer_boundaries):
+            layer_size = end - start
+            num_layer_blocks = self.layer_blocks[layer_idx]
+            layer_block_start = self.block_offsets[layer_idx].item()
+            layer_block_end = self.block_offsets[layer_idx + 1].item()
+            
+            layer_info = {
+                'layer_idx': layer_idx,
+                'param_range': (start, end),
+                'param_size': layer_size,
+                'block_range': (layer_block_start, layer_block_end),
+                'num_blocks': num_layer_blocks,
+                'layer_compression_ratio': layer_size / num_layer_blocks
+            }
+            info['layers'].append(layer_info)
+        
+        return info
+    
+    def get_blocks_for_layer(self, layer_idx: int, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Extract the block values for a specific layer from the latent vector."""
+        z = self._to_tensor(z)
+        layer_block_start = self.block_offsets[layer_idx].item()
+        layer_block_end = self.block_offsets[layer_idx + 1].item()
+        return z[layer_block_start:layer_block_end]
+    
+    def set_blocks_for_layer(self, layer_idx: int, z: torch.Tensor, 
+                            layer_blocks: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Update the block values for a specific layer in the latent vector."""
+        layer_blocks = self._to_tensor(layer_blocks)
+        z_new = z.clone()
+        layer_block_start = self.block_offsets[layer_idx].item()
+        layer_block_end = self.block_offsets[layer_idx + 1].item()
+        z_new[layer_block_start:layer_block_end] = layer_blocks
+        return z_new
 
 
 class BlockwiseDenseProjection(ParameterSharing):
@@ -1507,3 +1756,85 @@ class ParameterizedBasisProjection(ParameterSharing):
             'singular_values': singular_values.tolist(),
             'basis_norm': basis_matrix.norm().item()
         }
+
+def create_weight_sharing(model, args, optimizer_type=None):
+    """
+    Create a weight sharing instance based on the provided arguments.
+    
+    Args:
+        model: PyTorch model
+        args: Arguments object containing weight sharing configuration
+        optimizer_type: Optional optimizer type (for strategy-specific logic)
+        
+    Returns:
+        Weight sharing instance
+    """
+    
+    param_sharing_type = args.ws.lower()
+    seed = args.seed if args.seed is not None else 0
+    
+    if param_sharing_type == 'hard':
+        ws = HardWeightSharing(
+            model=model, 
+            d=args.d, 
+            seed=seed, 
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'lwb-hard':
+        ws = LayerwiseHardWeightSharing(
+            model=model, 
+            d=args.d, 
+            seed=seed, 
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'randproj':
+        normalize = args.normalize_projection
+        ws = RandomProjectionSoftSharing(
+            model=model, 
+            d=args.d, 
+            alpha=args.alpha, 
+            normalize=normalize, 
+            seed=seed,
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'sparseproj':
+        ws = SparseProjection(
+            model=model, 
+            d=args.d, 
+            alpha=args.alpha, 
+            seed=seed,
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'mlp':
+        hidden_dims = [int(dim) for dim in args.hidden_dims.split(',')]
+        activation = args.activation.lower() if args.activation else None
+        ws = MLPSoftSharing(
+            model=model, 
+            d=args.d, 
+            hidden_dims=hidden_dims, 
+            use_activation=args.use_activation, 
+            activation=activation, 
+            alpha=args.alpha, 
+            seed=seed,
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'hypernetwork':
+        ws = HyperNetworkSoftSharing(
+            model=model, 
+            d=args.d, 
+            alpha=args.alpha, 
+            seed=seed,
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'rff':
+        ws = RandomFourierFeaturesSoftSharing(
+            model=model, 
+            d=args.d, 
+            alpha=args.alpha, 
+            seed=seed,
+            device=args.ws_device
+        )
+    else:
+        raise ValueError(f"Unknown weight sharing type: {param_sharing_type}")
+    
+    return ws

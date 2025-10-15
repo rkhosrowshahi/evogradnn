@@ -11,7 +11,8 @@ from datetime import datetime
 import wandb
 from src.scheduler import *
 from src.models import get_model
-from src.utils import create_dataset, create_criterion, create_weight_sharing, population_based_strategy_init, distribution_based_strategy_init, evaluate_model_on_test, evaluate_solution_on_batch, evaluate_population_on_batch, load_solution_to_model, set_seed, params_to_vector, AverageMeter, STRATEGY_TYPES
+from src.weight_sharing import create_weight_sharing
+from src.utils import create_dataset, create_criterion, population_based_strategy_init, distribution_based_strategy_init, evaluate_model_on_test, evaluate_solution_on_batch, evaluate_population_on_batch, load_solution_to_model, set_seed, params_to_vector, AverageMeter, STRATEGY_TYPES
 
 
 def ea_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criterion, train_loader, val_loader, epoch, step, learning_rate, device, args):
@@ -622,8 +623,8 @@ if __name__ == "__main__":
                        help='Standard deviation for ES noise generation (used when strategy=es)')
     parser.add_argument('--es_lr', type=float, default=1.0,
                        help='Learning rate for ES optimizer')
-    parser.add_argument('--es_optimizer', type=str, default='sgd',
-                       choices=['sgd', 'adam'],
+    parser.add_argument('--es_optimizer', type=str, default='none',
+                       choices=['sgd', 'adam', 'none'],
                        help='Mean (mu) vector optimizer (updater) in ES optimizer')
     
     # ============================================================================
