@@ -698,8 +698,8 @@ if __name__ == "__main__":
                        help='Weight sharing strategy (e.g., randproj, mlp, hard)', required=True)
     parser.add_argument('--bus', type=str, default='none',
                        help='Base update strategy (BUS) for weight sharing: none, full, ema, ema_with_momentum, ema_with_init_optimizer_state_and_update_mean, or ema_in_es_loop')
-    parser.add_argument('--alpha', type=float, default=None,
-                       help='Scaling factor for random projection weight sharing')
+    parser.add_argument('--alpha', type=float, default=1.0,
+                       help='Scaling factor for weight sharing')
     parser.add_argument('--normalize_projection', action='store_true',
                        help='Normalize projection matrix for random projection weight sharing')
     parser.add_argument('--use_activation', action='store_true',
