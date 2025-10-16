@@ -242,7 +242,7 @@ def main(args):
     print(f"Starting training with arguments: {args}")
     
     # Load data and model
-    train_loader, val_loader, test_loader, num_classes, input_size = create_dataset(args, validation_split=0.01)
+    train_loader, val_loader, test_loader, num_classes, input_size = create_dataset(args)
 
     model = get_model(args.arch, input_size, num_classes, device)
     theta_0 = params_to_vector(model.parameters())
@@ -608,7 +608,7 @@ if __name__ == "__main__":
                        help='Dataset to train on (e.g., cifar10, cifar100, mnist)', required=True)
     parser.add_argument('--batch_size', type=int, default=256,
                        help='Batch size for training')
-    parser.add_argument('--val_split', type=float, default=0.01,
+    parser.add_argument('--val_split', type=float, default=0.0,
                        help='Validation split for training')
     parser.add_argument('--sampler', type=str, default=None,
                        help='Sampler for training')

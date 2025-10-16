@@ -82,7 +82,21 @@ def get_balanced_indices(dataset, split_size: int = 1000) -> Tuple[torch.Tensor,
     
     return torch.tensor(val_idx), torch.tensor(train_idx)
 
-def create_dataset(args, validation_split: float = 0.1) -> Tuple[Subset, Subset, Subset, int, int]:
+# Helper function to create weighted sampler and loader
+def create_inverse_balanced_loader(train_dataset: Subset) -> WeightedRandomSampler:
+        labels = [train_dataset.dataset.targets[i] for i in train_dataset.indices]
+        class_counts = np.bincount(labels)
+        class_weights = 1.0 / class_counts
+        sample_weights = [class_weights[label] for label in labels]
+        
+        sampler = WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True
+        )
+        return sampler
+
+def create_dataset(args) -> Tuple[Subset, Subset, Subset, int, int]:
     """Load and prepare dataset with train/val/test splits.
     
     Args:
@@ -155,27 +169,27 @@ def create_dataset(args, validation_split: float = 0.1) -> Tuple[Subset, Subset,
     test_dataset = dataset_class(root='./data', train=False, download=True, transform=transform_test)
     
     # Create validation split
-    val_indices, train_indices = get_balanced_indices(train_dataset, split_size=int(validation_split * len(train_dataset)))
+    validation_split = args.val_split
+    if validation_split > 0:
+        val_indices, train_indices = get_balanced_indices(train_dataset, split_size=int(validation_split * len(train_dataset)))
+        # Create subsets from original dataset
+        val_dataset = Subset(train_dataset, val_indices)
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            pin_memory=False,
+        )
+    else:
+        val_loader = None
 
-    # Create subsets from original dataset
-    val_dataset = Subset(train_dataset, val_indices)
+    
     train_dataset = Subset(train_dataset, train_indices)
     
     batch_size = args.batch_size
     # Create data loaders
     train_loader = None
-    # Helper function to create weighted sampler and loader
-    def create_inverse_balanced_loader():
-        labels = [train_dataset.dataset.targets[i] for i in train_dataset.indices]
-        class_counts = np.bincount(labels)
-        class_weights = 1.0 / class_counts
-        sample_weights = [class_weights[label] for label in labels]
-        
-        sampler = WeightedRandomSampler(
-            weights=sample_weights,
-            num_samples=len(sample_weights),
-            replacement=True
-        )
+    
     if args.sampler is None:
         train_loader = DataLoader(
             train_dataset,
@@ -186,7 +200,7 @@ def create_dataset(args, validation_split: float = 0.1) -> Tuple[Subset, Subset,
         )
     else:
         if args.sampler == 'inverse':
-            sampler = create_inverse_balanced_loader()
+            sampler = create_inverse_balanced_loader(train_dataset)
             train_loader = DataLoader(
                 train_dataset,
                 batch_size=batch_size,
@@ -205,12 +219,7 @@ def create_dataset(args, validation_split: float = 0.1) -> Tuple[Subset, Subset,
         else:
             raise ValueError(f"Invalid sampler: {args.sampler}")
     
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        pin_memory=False,
-    )
+   
     test_loader = DataLoader(
         test_dataset,
         batch_size=batch_size,
