@@ -182,6 +182,7 @@ def create_dataset(args) -> Tuple[Subset, Subset, Subset, int, int]:
         )
     else:
         val_loader = None
+        train_indices = range(len(train_dataset))
 
     
     train_dataset = Subset(train_dataset, train_indices)

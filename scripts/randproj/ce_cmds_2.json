@@ -5,27 +5,27 @@
   "commands": [
     {
       "name": "Seed 1",
-      "command": "python evo_trainer.py --seed 1 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init uniform --pop_init_bound 0.1 --ga_cr 0.1 --ga_std 0.01 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+      "command": "python evo_trainer.py --seed 1 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init uniform --pop_init_bound 0.1 --ga_cr 0.1 --ga_std 0.1 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
     },
     {
       "name": "Seed 22",
-      "command": "python evo_trainer.py --seed 22 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init uniform --pop_init_bound 0.1 --ga_cr 0.1 --ga_std 0.01 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+      "command": "python evo_trainer.py --seed 22 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init uniform --pop_init_bound 0.1 --ga_cr 0.1 --ga_std 0.1 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
     },
     {
       "name": "Seed 333",
-      "command": "python evo_trainer.py --seed 333 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init uniform --pop_init_bound 0.1 --ga_cr 0.1 --ga_std 0.01 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+      "command": "python evo_trainer.py --seed 333 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init uniform --pop_init_bound 0.1 --ga_cr 0.1 --ga_std 0.1 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
     },
     {
       "name": "Seed 1",
-      "command": "python evo_trainer.py --seed 1 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init normal --pop_init_bound 0.1 --ga_cr 0.1 --ga_std 0.01 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+      "command": "python evo_trainer.py --seed 1 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init normal --ga_cr 0.1 --ga_std 0.1 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
     },
     {
       "name": "Seed 22",
-      "command": "python evo_trainer.py --seed 22 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init normal --pop_init_bound 0.1 --ga_cr 0.1 --ga_std 0.01 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+      "command": "python evo_trainer.py --seed 22 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init normal --ga_cr 0.1 --ga_std 0.1 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
     },
     {
       "name": "Seed 333",
-      "command": "python evo_trainer.py --seed 333 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init normal --pop_init_bound 0.1 --ga_cr 0.1 --ga_std 0.01 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
+      "command": "python evo_trainer.py --seed 333 --dataset cifar10 --sampler inverse --arch lenet --d 128 --optimizer GA --pop_init normal --ga_cr 0.1 --ga_std 0.1 --popsize 64 --epochs 200 --bus none --criterion ce --ws randproj --normalize_projection --wd 5e-4"
     },
     {
       "name": "Seed 1",
