@@ -353,7 +353,7 @@ def main(args):
         run_name = args.wandb_name if args.wandb_name else f"{timestamp}"
         
         wandb.init(
-            project=f"{args.wandb_project}-{args.dataset}-{args.arch}-v2",
+            project=f"{args.wandb_project}-{args.dataset}-{args.arch}-v3",
             name=run_name,
             config=config,
             tags=[args.arch, args.dataset, args.optimizer, args.ws, args.bus, optimizer_type]
