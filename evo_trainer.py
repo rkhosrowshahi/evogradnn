@@ -53,16 +53,16 @@ def ea_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
             # Get new solutions
             key, key_ask, key_tell = jax.random.split(key, 3)
             candidate, optimizer_state = optimizer.ask(key_ask, optimizer_state, optimizer_params)
-            
             # Evaluate solutions
             candidate_fitnesses = evaluate_population_on_batch(population=candidate, ws=ws, criterion=criterion, batch=batch, device=device, weight_decay=weight_decay)
             # print(f"Best population fitness: {np.min(optimizer_state.fitness)}, candidate fitness: {np.min(candidate_fitnesses)}, delta: {np.min(candidate_fitnesses) - np.min(optimizer_state.fitness)}")
-            candidate_fitness_argsort = np.argsort(candidate_fitnesses)
-            topk_indices = candidate_fitness_argsort[:5]
-            mean_candidate = candidate[topk_indices].mean(axis=0)
-            mean_fitness = evaluate_solution_on_batch(z=mean_candidate, ws=ws, criterion=criterion, batch=batch, device=device)
-            candidate = candidate.at[candidate_fitness_argsort[-1]].set(mean_candidate)
-            candidate_fitnesses[candidate_fitness_argsort[-1]] = mean_fitness
+            if 'DA' not in args.optimizer:
+                candidate_fitness_argsort = np.argsort(candidate_fitnesses)
+                topk_indices = candidate_fitness_argsort[:5]
+                mean_candidate = candidate[topk_indices].mean(axis=0)
+                mean_fitness = evaluate_solution_on_batch(z=mean_candidate, ws=ws, criterion=criterion, batch=batch, device=device)
+                candidate = candidate.at[candidate_fitness_argsort[-1]].set(mean_candidate)
+                candidate_fitnesses[candidate_fitness_argsort[-1]] = mean_fitness
             # Update 
             optimizer_state, metrics = optimizer.tell(key=key_tell, population=candidate, fitness=candidate_fitnesses, state=optimizer_state, params=optimizer_params)
 
@@ -277,6 +277,8 @@ def main(args):
             init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
         elif args.pop_init == 'uniform':
             init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+        elif args.pop_init == 'zeros':
+            init_population = np.zeros((args.popsize, d))
         else:
             raise ValueError(f"Invalid initial distribution: {args.pop_init}")
         init_population[0] = x0.copy()
@@ -388,10 +390,43 @@ def main(args):
 
         # Get mean solution from EA or ES
         if optimizer_type == 'EA':
-            population = optimizer.get_population(state=optimizer_state)
-            topk_indices = np.argsort(optimizer_state.fitness)[:5]
-            zt = population[topk_indices].mean(axis=0)
-            # zt = optimizer.get_best_solution(state=optimizer_state)
+            
+            if 'GA' in args.optimizer:
+                z_best = optimizer.get_best_solution(state=optimizer_state)
+                load_solution_to_model(z_best, ws, device)
+                theta_best_test_ce, theta_best_test_top1, theta_best_test_top5, theta_best_test_f1 = evaluate_model_on_test(model=ws.model, 
+                                                            data_loader=test_loader, 
+                                                            device=device, 
+                                                            train=False)
+                z_mean = optimizer.get_population(state=optimizer_state).mean(axis=0)
+                load_solution_to_model(z_mean, ws, device)
+                theta_mean_test_ce, theta_mean_test_top1, theta_mean_test_top5, theta_mean_test_f1 = evaluate_model_on_test(model=ws.model, 
+                                                            data_loader=test_loader, 
+                                                            device=device, 
+                                                            train=False)
+                population = optimizer.get_population(state=optimizer_state)
+                topk_indices = np.argsort(optimizer_state.fitness)[:5]
+                z_mean_top5 = population[topk_indices].mean(axis=0)
+                load_solution_to_model(z_mean_top5, ws, device)
+                theta_mean_topk_test_ce, theta_mean_topk_test_top1, theta_mean_topk_test_top5, theta_mean_topk_test_f1 = evaluate_model_on_test(model=ws.model, 
+                                                            data_loader=test_loader, 
+                                                            device=device, 
+                                                            train=False)
+                top1_values = np.array([theta_best_test_top1, theta_mean_test_top1, theta_mean_topk_test_top1])
+                argmin = np.argmax(top1_values)
+                if argmin == 0:
+                    zt = z_best
+                elif argmin == 1:
+                    zt = z_mean
+                elif argmin == 2:
+                    zt = z_mean_top5
+                else:
+                    raise ValueError(f"Invalid argument: {argmin}")
+                print(f"Best solution eval top1: {theta_best_test_top1:.6f}, mean solution eval top1: {theta_mean_test_top1:.6f}, mean topk=5 solution eval top1: {theta_mean_topk_test_top1:.6f}")
+            else:
+                population = optimizer.get_population(state=optimizer_state)
+                topk_indices = np.argsort(optimizer_state.fitness)[:5]
+                zt = population[topk_indices].mean(axis=0)
         elif optimizer_type == 'ES':  # ES strategy
             zt = optimizer.get_mean(state=optimizer_state)
             if args.optimizer.lower() == 'sv_cma_es' or args.optimizer.lower() == 'sv_open_es':

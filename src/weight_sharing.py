@@ -167,13 +167,10 @@ class RandomProjectionSoftSharing(ParameterSharing):
         Returns:
             Random projection matrix P of shape (D, d)
         """
-        generator = torch.Generator(device=self.device)
-        generator.manual_seed(self.seed)
-        P = torch.randn(self.D, self.d, device=self.device, generator=generator)
+        P = torch.randn(self.D, self.d, device=self.device)
         if self.normalize:
             # P = P / P.norm(dim=0, keepdim=True)
-            Q, _ = torch.linalg.qr(P)
-            P = Q
+            P, _ = torch.linalg.qr(P)
             # P = Q.T
             # P = Q[:, :self.d].T
 
@@ -260,15 +257,13 @@ class RandomFourierFeaturesSoftSharing(ParameterSharing):
         
         Draws omega from N(0, sigma^{-2} I) and b from uniform [0, 2π].
         """
-        generator = torch.Generator(device=self.device)
-        generator.manual_seed(self.seed)
         
         # Draw omegas from N(0, sigma^{-2} I)
-        omega = torch.randn(self.D, self.d, device=self.device, generator=generator) / self.sigma
+        omega = torch.randn(self.D, self.d, device=self.device) / self.sigma
         self.register_buffer('omega', omega)
         
         # Draw biases from uniform [0, 2π]
-        b = torch.rand(self.D, device=self.device, generator=generator) * 2 * np.pi
+        b = torch.rand(self.D, device=self.device) * 2 * np.pi
         self.register_buffer('b', b)
 
     def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
@@ -439,9 +434,7 @@ class HyperNetworkSoftSharing(ParameterSharing):
 
         if emb_init == "random":
             # Option 1: Random initialization with seed
-            generator = torch.Generator(device=device)
-            generator.manual_seed(self.seed)
-            embeddings = torch.randn(self.num_layers, self.embed_dim, generator=generator, device=device) * 0.1
+            embeddings = torch.randn(self.num_layers, self.embed_dim, device=device) * 0.1
             self.register_parameter('embeddings', nn.Parameter(embeddings))
         elif emb_init == "sinusoidal":
             # Precompute sinusoidal embeddings for all layers
@@ -518,14 +511,12 @@ class SparseProjection(ParameterSharing):
         self.sparsity = sparsity
         
         # Generate indices for non-zeros: random positions with seed
-        generator = torch.Generator(device=device)
-        generator.manual_seed(self.seed)
         num_nz = int(self.D * self.d * self.sparsity)
-        row_idx = torch.randint(0, self.D, (num_nz,), device=device, generator=generator)
-        col_idx = torch.randint(0, self.d, (num_nz,), device=device, generator=generator)
+        row_idx = torch.randint(0, self.D, (num_nz,), device=device)
+        col_idx = torch.randint(0, self.d, (num_nz,), device=device)
         
         # Values: N(0,1)
-        values = torch.randn(num_nz, device=device, generator=generator)
+        values = torch.randn(num_nz, device=device)
         
         # Sparse tensor in COO
         P_coo = torch.sparse_coo_tensor(
@@ -600,19 +591,15 @@ class FastfoodProjection(ParameterSharing):
         assert np.log2(self.D).is_integer(), "Full parameter dimension D must be power of 2"
         self.fwht = FWHT.apply
         
-        # Generate fixed random factors (frozen) with seed
-        generator = torch.Generator(device=device)
-        generator.manual_seed(self.seed)
-        
         # Permutation Pi
-        self.register_buffer('perm', torch.randperm(self.D, device=device, generator=generator))
+        self.register_buffer('perm', torch.randperm(self.D, device=device))
         
         # Diagonal B: ±1
-        self.register_buffer('B', torch.sign(torch.rand(self.D, device=device, generator=generator) - 0.5))
+        self.register_buffer('B', torch.sign(torch.rand(self.D, device=device) - 0.5))
         
         # Diagonal H: abs ~ N(0,1), random signs (for d slice)
-        h_abs = torch.abs(torch.randn(self.d, device=device, generator=generator))
-        h_sign = torch.sign(torch.rand(self.d, device=device, generator=generator) - 0.5)
+        h_abs = torch.abs(torch.randn(self.d, device=device))
+        h_sign = torch.sign(torch.rand(self.d, device=device) - 0.5)
         self.register_buffer('H', h_abs * h_sign)
         
         # Scaling factor
@@ -657,7 +644,6 @@ class HardWeightSharing(ParameterSharing):
     Args:
         model: PyTorch model
         d: Number of blocks (latent dimension)
-        seed: Random seed for reproducible assignment generation
         alpha: Scaling factor for parameters
         device: Device for computations
         assignment_strategy: How to initialize assignments ('random', 'uniform')
@@ -677,9 +663,7 @@ class HardWeightSharing(ParameterSharing):
         """Initialize parameter assignments to blocks."""
         if self.assignment_strategy == 'random':
             # Random assignment with seed
-            generator = torch.Generator(device=self.device)
-            generator.manual_seed(self.seed)
-            assignments = torch.randint(0, self.d, (self.D,), device=self.device, generator=generator)
+            assignments = torch.randint(0, self.d, (self.D,), device=self.device)
         elif self.assignment_strategy == 'uniform':
             # Uniform distribution across blocks
             assignments = torch.arange(self.D, device=self.device) % self.d
@@ -802,9 +786,6 @@ class LayerwiseHardWeightSharing(ParameterSharing):
         """Initialize parameter assignments to layer-specific blocks."""
         assignments = torch.zeros(self.D, dtype=torch.long, device=self.device)
         
-        generator = torch.Generator(device=self.device)
-        generator.manual_seed(self.seed)
-        
         # Calculate cumulative block indices for each layer
         block_offsets = [0]
         for num_blocks in self.layer_blocks:
@@ -825,7 +806,6 @@ class LayerwiseHardWeightSharing(ParameterSharing):
                     layer_block_end, 
                     (layer_size,), 
                     device=self.device, 
-                    generator=generator
                 )
             elif self.assignment_strategy == 'uniform':
                 # Uniform distribution across layer's blocks
@@ -1058,9 +1038,7 @@ class BlockwiseDenseProjection(ParameterSharing):
             
         elif self.block_strategy == 'random':
             # Random permutation then equal division with seed
-            generator = torch.Generator(device=self.device)
-            generator.manual_seed(self.seed)
-            perm = torch.randperm(self.D, device=self.device, generator=generator)
+            perm = torch.randperm(self.D, device=self.device)
             self.register_buffer('param_permutation', perm)
             
             block_size = self.D // self.num_blocks
@@ -1113,8 +1091,6 @@ class BlockwiseDenseProjection(ParameterSharing):
     
     def _init_projections(self) -> None:
         """Initialize projection matrices for each block with seed."""
-        generator = torch.Generator(device=self.device)
-        generator.manual_seed(self.seed)
         
         for i, (start, end) in enumerate(self.block_boundaries):
             block_size = end - start
@@ -1126,7 +1102,7 @@ class BlockwiseDenseProjection(ParameterSharing):
                 block_d = self.d_per_block
             
             # Create projection matrix: block_size x block_d
-            P = torch.randn(block_size, block_d, device=self.device, generator=generator)
+            P = torch.randn(block_size, block_d, device=self.device)
             
             if self.normalize:
                 P = P / P.norm(dim=0, keepdim=True)
@@ -1266,9 +1242,7 @@ class LearnedBasisProjection(ParameterSharing):
     def _init_basis(self) -> None:
         """Initialize basis with random projection using seed."""
         # Start with random basis, will be updated during training
-        generator = torch.Generator(device=self.device)
-        generator.manual_seed(self.seed)
-        basis = torch.randn(self.D, self.d, device=self.device, generator=generator)
+        basis = torch.randn(self.D, self.d, device=self.device)
         basis = basis / basis.norm(dim=0, keepdim=True)  # Normalize columns
         self.register_buffer('basis_matrix', basis)
     
@@ -1567,9 +1541,7 @@ class ParameterizedBasisProjection(ParameterSharing):
     def _init_reference_basis(self) -> None:
         """Initialize reference basis for orthogonal parameterization with seed."""
         # Create initial orthogonal basis using QR decomposition
-        generator = torch.Generator(device=self.device)
-        generator.manual_seed(self.seed)
-        random_matrix = torch.randn(self.D, self.k, device=self.device, generator=generator)
+        random_matrix = torch.randn(self.D, self.k, device=self.device)
         Q, _ = torch.linalg.qr(random_matrix)
         self.register_buffer('reference_basis', Q)
     
@@ -1712,9 +1684,7 @@ class ParameterizedBasisProjection(ParameterSharing):
         """Create a latent vector from a basis matrix and coordinates."""
         # This is more complex - would need to invert the parameterization
         # For now, return random basis parameters (this is a limitation)
-        generator = torch.Generator(device=self.device)
-        generator.manual_seed(self.seed)
-        z_basis = torch.randn(self.d_basis, device=self.device, generator=generator)
+        z_basis = torch.randn(self.d_basis, device=self.device)
         z_coords = coordinates
         return torch.cat([z_basis, z_coords])
     
