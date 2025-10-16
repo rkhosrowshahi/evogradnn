@@ -16,7 +16,7 @@ import scienceplots
 from sklearn.metrics import f1_score
 from sklearn.model_selection import train_test_split
 from torch.optim.lr_scheduler import _LRScheduler
-from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler, Sampler
 from evosax.algorithms.distribution_based import distribution_based_algorithms
 from evosax.algorithms.population_based import population_based_algorithms
 from evosax.core.fitness_shaping import *
@@ -83,6 +83,64 @@ def get_balanced_indices(dataset, split_size: int = 1000) -> Tuple[torch.Tensor,
     return torch.tensor(val_idx), torch.tensor(train_idx)
 
 # Helper function to create weighted sampler and loader
+class BalancedBatchSampler(Sampler):
+    """
+    Sampler that yields balanced batches where each class has approximately equal representation.
+    For CIFAR-10 with batch_size=256 and 10 classes: 25-26 samples per class per batch.
+    """
+    def __init__(self, dataset: Subset, batch_size: int, num_classes: int):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.num_classes = num_classes
+        
+        # Get labels for all samples
+        self.labels = np.array([dataset.dataset.targets[i] for i in dataset.indices])
+        
+        # Create indices for each class
+        self.class_indices = {c: np.where(self.labels == c)[0] for c in range(num_classes)}
+        
+        # Calculate samples per class per batch
+        self.base_samples_per_class = batch_size // num_classes
+        self.extra_samples = batch_size % num_classes
+        
+        # Calculate total number of batches based on smallest class
+        min_class_size = min(len(indices) for indices in self.class_indices.values())
+        self.num_batches = min_class_size // self.base_samples_per_class
+        
+    def __iter__(self):
+        # Shuffle indices for each class
+        shuffled_class_indices = {
+            c: np.random.permutation(indices).tolist() 
+            for c, indices in self.class_indices.items()
+        }
+        
+        for batch_idx in range(self.num_batches):
+            batch = []
+            
+            # Determine which classes get extra samples (rotate to distribute fairly)
+            classes_with_extra = set((batch_idx + i) % self.num_classes for i in range(self.extra_samples))
+            
+            for class_id in range(self.num_classes):
+                # Calculate how many samples from this class
+                n_samples = self.base_samples_per_class
+                if class_id in classes_with_extra:
+                    n_samples += 1
+                
+                # Get samples for this class
+                start_idx = batch_idx * self.base_samples_per_class
+                end_idx = start_idx + n_samples
+                
+                class_batch = shuffled_class_indices[class_id][start_idx:end_idx]
+                batch.extend(class_batch)
+            
+            # Shuffle the batch to mix classes
+            random.shuffle(batch)
+            yield batch
+    
+    def __len__(self):
+        return self.num_batches
+
+
 def create_inverse_balanced_loader(train_dataset: Subset) -> WeightedRandomSampler:
         labels = [train_dataset.dataset.targets[i] for i in train_dataset.indices]
         class_counts = np.bincount(labels)
@@ -206,6 +264,14 @@ def create_dataset(args) -> Tuple[Subset, Subset, Subset, int, int]:
                 train_dataset,
                 batch_size=batch_size,
                 sampler=sampler,
+                pin_memory=False,
+                num_workers=0
+            )
+        elif args.sampler == 'balanced':
+            batch_sampler = BalancedBatchSampler(train_dataset, batch_size, num_classes)
+            train_loader = DataLoader(
+                train_dataset,
+                batch_sampler=batch_sampler,
                 pin_memory=False,
                 num_workers=0
             )

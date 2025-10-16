@@ -33,6 +33,11 @@ def ea_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
 
     for count_batch in range(1, num_batches+1):
         batch = next(train_loader_iterator)
+        # Count the number of samples in each unique class in the batch targets
+        # targets = batch[1] if isinstance(batch, (list, tuple)) else batch['target']
+        # unique_classes, counts = torch.unique(targets, return_counts=True)
+        # class_sample_counts = dict(zip(unique_classes.tolist(), counts.tolist()))
+        # print(f"Class sample counts: {class_sample_counts}")
 
         if args.optimizer.lower() == 'pso':
             population = optimizer.get_population(state=optimizer_state)
@@ -141,6 +146,10 @@ def es_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
 
     for count_batch in range(1, num_batches+1):
         batch = next(train_loader_iterator)
+        # targets = batch[1] if isinstance(batch, (list, tuple)) else batch['target']
+        # unique_classes, counts = torch.unique(targets, return_counts=True)
+        # class_sample_counts = dict(zip(unique_classes.tolist(), counts.tolist()))
+        # print(f"Class sample counts: {class_sample_counts}")
 
         for count_iter in range(1, inner_steps+1):
             # Get new solutions
