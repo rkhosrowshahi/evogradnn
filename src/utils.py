@@ -1413,11 +1413,11 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
         #         steps // 180: 0.1,  # multiply by 0.1 again at step 180
         #     }
         # )
-        # lr_schedule = optax.cosine_decay_schedule(
-        #     init_value=args.es_lr,
-        #     decay_steps=steps,
-        #     alpha=1e-1,
-        # )
+        lr_schedule = optax.cosine_decay_schedule(
+            init_value=args.es_lr,
+            decay_steps=steps,
+            alpha=1e-3,
+        )
         # lr_schedule = optax.piecewise_constant_schedule(
         #     init_value=args.es_lr,
         #     boundaries_and_scales={
@@ -1425,7 +1425,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
         #         steps // 180: args.es_lr,  # multiply by 0.1 again at step 180
         #     }
         # )
-        lr_schedule = optax.constant_schedule(args.es_lr)
+        # lr_schedule = optax.constant_schedule(args.es_lr)
         std_schedule = optax.cosine_decay_schedule(
             init_value=std_init,
             decay_steps=steps,
@@ -1625,7 +1625,7 @@ def population_based_strategy_init(strategy: str, args: argparse.Namespace, x0: 
         std_schedule = optax.cosine_decay_schedule(
             init_value=args.ga_std,
             decay_steps=steps,
-            alpha=1e-3,
+            alpha=1e-2,
         )
         es = population_based_algorithms['SimpleGA'](
             population_size=args.popsize, 
