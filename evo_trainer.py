@@ -714,7 +714,7 @@ if __name__ == "__main__":
                        help='Initial bound for EA optimizer')
     parser.add_argument('--de_cr', type=float, default=None,
                        help='Crossover rate for DE optimizer')
-    parser.add_argument('--de_mr', type=int, default=None,
+    parser.add_argument('--de_mr', type=float, default=None,
                        help='Mutation rate for DE optimizer')
     parser.add_argument('--ga_cr', type=float, default=None,
                        help='Crossover rate for GA optimizer')
