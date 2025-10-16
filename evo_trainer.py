@@ -21,7 +21,6 @@ def ea_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
     weight_decay = args.wd
     inner_steps = args.inner_steps
 
-    train_loader_iterator = itertools.cycle(train_loader)
     num_batches = len(train_loader)
     period = num_batches // 10
 
@@ -32,7 +31,7 @@ def ea_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
     velocity = torch.zeros(ws.D, device=device)
 
     for count_batch in range(1, num_batches+1):
-        batch = next(train_loader_iterator)
+        batch = next(iter(train_loader))
         # Count the number of samples in each unique class in the batch targets
         # targets = batch[1] if isinstance(batch, (list, tuple)) else batch['target']
         # unique_classes, counts = torch.unique(targets, return_counts=True)
@@ -134,7 +133,6 @@ def es_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
     weight_decay = args.wd
     inner_steps = args.inner_steps
 
-    train_loader_iterator = itertools.cycle(train_loader)
     num_batches = len(train_loader)
     period = num_batches // 10
 
@@ -145,7 +143,7 @@ def es_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
     velocity = torch.zeros(ws.D, device=device)
 
     for count_batch in range(1, num_batches+1):
-        batch = next(train_loader_iterator)
+        batch = next(iter(train_loader))
         # targets = batch[1] if isinstance(batch, (list, tuple)) else batch['target']
         # unique_classes, counts = torch.unique(targets, return_counts=True)
         # class_sample_counts = dict(zip(unique_classes.tolist(), counts.tolist()))
