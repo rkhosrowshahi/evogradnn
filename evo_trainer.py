@@ -58,7 +58,7 @@ def ea_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
             mean_fitness = evaluate_solution_on_batch(z=mean_candidate, ws=ws, criterion=criterion, batch=batch, device=device)
             candidate = candidate.at[candidate_fitness_argsort[-1]].set(mean_candidate)
             candidate_fitnesses[candidate_fitness_argsort[-1]] = mean_fitness
-            # Update ES
+            # Update 
             optimizer_state, metrics = optimizer.tell(key=key_tell, population=candidate, fitness=candidate_fitnesses, state=optimizer_state, params=optimizer_params)
 
             pop_best_loss_meter.update(np.min(optimizer_state.fitness))
@@ -315,6 +315,7 @@ def main(args):
             'inner_steps': args.inner_steps,
             'dimensions': args.d,
             'popsize': args.popsize,
+            'pop_init': args.pop_init,
             'pop_init_bound': args.pop_init_bound,
             'ga_std': args.ga_std,
             'ga_cr': args.ga_cr,
