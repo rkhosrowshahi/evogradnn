@@ -1435,6 +1435,8 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             optimizer = optax.sgd(learning_rate=lr_schedule)
         elif args.es_optimizer == 'adam':
             optimizer = optax.adam(learning_rate=lr_schedule)
+        elif args.es_optimizer == 'adamw':
+            optimizer = optax.adamw(learning_rate=lr_schedule)
         else:
             raise ValueError(f"Invalid optimizer: {args.es_optimizer}")
         es = distribution_based_algorithms[strategy](
