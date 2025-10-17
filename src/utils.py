@@ -88,13 +88,17 @@ class BalancedBatchSampler(Sampler):
     Sampler that yields balanced batches where each class has approximately equal representation.
     For CIFAR-10 with batch_size=256 and 10 classes: 25-26 samples per class per batch.
     """
-    def __init__(self, dataset: Subset, batch_size: int, num_classes: int):
+    def __init__(self, dataset, batch_size: int, num_classes: int):
         self.dataset = dataset
         self.batch_size = batch_size
         self.num_classes = num_classes
         
         # Get labels for all samples
-        self.labels = np.array([dataset.dataset.targets[i] for i in dataset.indices])
+        # Handle both Subset and full dataset
+        if isinstance(dataset, Subset):
+            self.labels = np.array([dataset.dataset.targets[i] for i in dataset.indices])
+        else:
+            self.labels = np.array(dataset.targets)
         
         # Create indices for each class
         self.class_indices = {c: np.where(self.labels == c)[0] for c in range(num_classes)}
@@ -1942,9 +1946,11 @@ def evaluate_solution_on_batch(z, ws, criterion, batch, weight_decay=0, device='
     return fitness
 
 
-def evaluate_population_on_batch(population, ws, criterion, batch, weight_decay=0, device='cuda'):
+def evaluate_population_on_batch(population, ws, criterion, batch, train_loader=None, weight_decay=0, device='cuda'):
     fitnesses = np.zeros(len(population))
     for i, z in enumerate(population):
+        if train_loader is not None:
+            batch = next(iter(train_loader))
         try:
             load_solution_to_model(z, ws, device)
             fitnesses[i] = evaluate_model_on_batch(model=ws.model, criterion=criterion, batch=batch, device=device)

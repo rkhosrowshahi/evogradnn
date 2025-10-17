@@ -218,7 +218,6 @@ def es_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
                     f"mean loss: {mean_loss_meter.avg:.4f}")
 
         step += 1
-        print(f"Step {step}, learning rate: {learning_rate}")
     
     return key, optimizer_state, step
 
