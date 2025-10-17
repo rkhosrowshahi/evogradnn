@@ -169,7 +169,6 @@ def create_dataset(args) -> Tuple[Subset, Subset, Subset, int, int]:
     """
     dataset = args.dataset
     batch_size = args.batch_size
-    print(f"Batch size: {batch_size}")
     if dataset == 'cifar100':
         num_classes = 100
         stats = ((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761))
@@ -243,8 +242,6 @@ def create_dataset(args) -> Tuple[Subset, Subset, Subset, int, int]:
         train_dataset = Subset(train_dataset, train_indices)
     else:
         val_loader = None
-
-    print(f"Train dataset length: {len(train_dataset)}")
     # Create data loaders
     train_loader = None
     
@@ -284,7 +281,6 @@ def create_dataset(args) -> Tuple[Subset, Subset, Subset, int, int]:
             )
         else:
             raise ValueError(f"Invalid sampler: {args.sampler}")
-    print(f"Train loader length: {len(train_loader)}")
    
     test_loader = DataLoader(
         test_dataset,
