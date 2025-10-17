@@ -273,7 +273,7 @@ def main(args):
         optimizer, optimizer_params = population_based_strategy_init(strategy=args.optimizer, args=args, x0=x0, steps=len(train_loader) * args.epochs)
         # Initialize population state
         if args.pop_init == 'normal':
-            init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+            init_population = np.random.normal(x0, args.pop_init_std, size=(args.popsize, d))
         elif args.pop_init == 'uniform':
             init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
         elif args.pop_init == 'zeros':
@@ -712,7 +712,9 @@ if __name__ == "__main__":
                        choices=['normal', 'uniform'],
                        help='Initial distribution for EA optimizer')
     parser.add_argument('--pop_init_bound', type=float, default=None,
-                       help='Initial bound for EA optimizer')
+                       help='Initial bound for population initialization with uniform distribution')
+    parser.add_argument('--pop_init_std', type=float, default=None,
+                       help='Initial standard deviation for population initialization with normal distribution')
     parser.add_argument('--de_cr', type=float, default=None,
                        help='Crossover rate for DE optimizer')
     parser.add_argument('--de_mr', type=float, default=None,
