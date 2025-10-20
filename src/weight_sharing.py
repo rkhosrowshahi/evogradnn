@@ -2887,6 +2887,249 @@ class LayerwiseRandomProjection(ParameterSharing):
         return z_new
 
 
+class GlobalRandomProjection(ParameterSharing):
+    """
+    Global Random Projection: Single projection matrix for all weight parameters.
+
+    This class implements layer-wise soft parameter sharing by applying a single random projection
+    matrix to all weight parameters collectively, while keeping bias parameters as individual
+    learnable parameters with identity mapping.
+
+    Structure:
+    - Weight parameters: theta_weights = P @ z_weights, where P is a random matrix of shape (total_weight_params, d)
+    - Bias parameters: theta_bias = z_bias (identity mapping, no compression)
+    - Total latent dimension d_total = d + total_bias_size
+
+    Args:
+        model: PyTorch model
+        d: Latent dimension for weight parameters
+        alpha: Scaling factor for parameters
+        normalize: Whether to normalize projection matrices using QR decomposition
+        device: Device for computations
+        seed: Random seed for reproducible initialization
+    """
+
+    def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0,
+                 normalize: bool = False, device: str = 'cuda', seed: int = 0) -> None:
+
+        # Store parameters before calling super().__init__
+        self.normalize = normalize
+        self._weight_latent_dim = d  # Store the input d for weight latent dimension
+
+        # Initialize base class (will set self.d to the input d temporarily)
+        super().__init__(model, d, alpha, device, seed)
+
+        # Extract layer information (separating weights and biases)
+        self._extract_layer_info()
+
+        # Calculate actual latent dimension: d (for weights) + total_bias_size (for biases)
+        self.d = self._weight_latent_dim + self.total_bias_size
+
+        # Initialize projection matrix for weights
+        self.initialize()
+
+        print(f"GlobalRandomProjection initialized:")
+        print(f"  - Total weight parameters (W): {self.total_weight_size}")
+        print(f"  - Total bias parameters (b): {self.total_bias_size}")
+        print(f"  - Weight latent dimension (d): {self._weight_latent_dim}")
+        print(f"  - Total latent dimension: {self.d} = {self._weight_latent_dim} + {self.total_bias_size}")
+        print(f"  - Total parameters (D): {self.D}")
+        print(f"  - Weight compression ratio: {self.total_weight_size / self._weight_latent_dim:.2f}")
+        print(f"  - normalize: {self.normalize}")
+
+    def _extract_layer_info(self) -> None:
+        """Extract layer boundaries, separating weights and biases."""
+        self.weight_boundaries = []  # List of (start_idx, end_idx) for weight layers
+        self.weight_sizes = []  # Number of parameters in each weight layer
+        self.weight_layer_names = []  # Names of weight layers
+
+        self.bias_boundaries = []  # List of (start_idx, end_idx) for bias layers
+        self.bias_sizes = []  # Number of parameters in each bias layer
+        self.bias_layer_names = []  # Names of bias layers
+
+        start_idx = 0
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                layer_size = param.numel()
+                end_idx = start_idx + layer_size
+
+                is_bias = 'bias' in name
+
+                if is_bias:
+                    self.bias_boundaries.append((start_idx, end_idx))
+                    self.bias_sizes.append(layer_size)
+                    self.bias_layer_names.append(name)
+                else:
+                    self.weight_boundaries.append((start_idx, end_idx))
+                    self.weight_sizes.append(layer_size)
+                    self.weight_layer_names.append(name)
+
+                start_idx = end_idx
+
+        self.num_weight_layers = len(self.weight_boundaries)
+        self.num_bias_params = len(self.bias_boundaries)
+        self.total_weight_size = sum(self.weight_sizes)
+        self.total_bias_size = sum(self.bias_sizes)
+
+        # Create weight parameter offsets for easy indexing
+        self.weight_offsets = [0]
+        cumsum = 0
+        for size in self.weight_sizes:
+            cumsum += size
+            self.weight_offsets.append(cumsum)
+
+    def initialize(self) -> None:
+        """Initialize the random projection matrix for all weight parameters."""
+        # Create single projection matrix for all weights: total_weight_size x d
+        P = torch.randn(self.total_weight_size, self._weight_latent_dim, device=self.device)
+
+        if self.normalize:
+            # Apply normalization: each column has unit norm, then scale by 1/sqrt(d)
+            # P = P / P.norm(dim=0, keepdim=True)
+            P, _ = torch.linalg.qr(P)
+            P = P / (self._weight_latent_dim ** 0.5)
+
+        # Store as buffer (non-learnable)
+        self.register_buffer('P', P)
+
+    def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """
+        Map latent vector to full parameter space using global random projection.
+
+        Args:
+            z: Latent vector of shape (d_total,) where d_total = d + total_bias_size
+               The latent vector is organized as:
+               - z[0:d]: latent for all weight parameters (global projection)
+               - z[d:]: latent for bias parameters (identity mapping)
+
+        Returns:
+            Full parameter tensor of shape (D,)
+        """
+        z = self._to_tensor(z)
+
+        # Validate input dimension
+        if z.shape[0] != self.d:
+            raise ValueError(f"Expected latent vector of size {self.d}, got {z.shape[0]}")
+
+        # Split latent vector
+        z_weights = z[:self._weight_latent_dim]  # Shape: (d,)
+        z_biases = z[self._weight_latent_dim:]   # Shape: (total_bias_size,)
+
+        # Initialize output tensor
+        theta = torch.zeros(self.D, device=self.device)
+
+        # Apply global projection for all weight parameters
+        theta_weights = self.P @ z_weights  # Shape: (total_weight_size,)
+
+        # Place weight parameters in their correct positions
+        weight_idx = 0
+        for layer_idx in range(self.num_weight_layers):
+            start_param, end_param = self.weight_boundaries[layer_idx]
+            layer_size = self.weight_sizes[layer_idx]
+
+            theta[start_param:end_param] = theta_weights[weight_idx:weight_idx + layer_size]
+            weight_idx += layer_size
+
+        # Handle bias parameters (identity mapping)
+        bias_offset = 0
+        for bias_idx in range(self.num_bias_params):
+            start_param, end_param = self.bias_boundaries[bias_idx]
+            bias_size = self.bias_sizes[bias_idx]
+
+            theta[start_param:end_param] = z_biases[bias_offset:bias_offset + bias_size]
+            bias_offset += bias_size
+
+        # Apply scaling and add to base parameters
+        theta = self.process(theta)
+        return self.theta_base + theta
+
+    def get_compression_ratio(self) -> float:
+        """Return the compression ratio achieved by the projection (for weights only)."""
+        return self.total_weight_size / self._weight_latent_dim
+
+    def get_layer_info(self) -> dict:
+        """Return detailed information about layer structure."""
+        info = {
+            'num_weight_layers': self.num_weight_layers,
+            'num_bias_params': self.num_bias_params,
+            'total_weight_size': self.total_weight_size,
+            'total_bias_size': self.total_bias_size,
+            'weight_latent_dim': self._weight_latent_dim,
+            'total_latent_dim': self.d,
+            'total_parameters': self.D,
+            'weight_compression_ratio': self.get_compression_ratio(),
+            'weight_layers': [],
+            'bias_layers': [],
+            'normalize': self.normalize
+        }
+
+        # Weight layers info
+        for layer_idx in range(self.num_weight_layers):
+            start_param, end_param = self.weight_boundaries[layer_idx]
+            start_weight = self.weight_offsets[layer_idx]
+            end_weight = self.weight_offsets[layer_idx + 1]
+
+            layer_info = {
+                'name': self.weight_layer_names[layer_idx],
+                'layer_idx': layer_idx,
+                'param_range': (start_param, end_param),
+                'param_size': self.weight_sizes[layer_idx],
+                'weight_range': (start_weight, end_weight),
+            }
+            info['weight_layers'].append(layer_info)
+
+        # Bias layers info (each parameter is its own latent dimension)
+        bias_offset = 0
+        for bias_idx in range(self.num_bias_params):
+            start_param, end_param = self.bias_boundaries[bias_idx]
+            bias_size = self.bias_sizes[bias_idx]
+            bias_latent_start = self._weight_latent_dim + bias_offset
+            bias_latent_end = bias_latent_start + bias_size
+
+            bias_info = {
+                'name': self.bias_layer_names[bias_idx],
+                'bias_idx': bias_idx,
+                'param_range': (start_param, end_param),
+                'param_size': bias_size,
+                'latent_range': (bias_latent_start, bias_latent_end),
+                'compression_ratio': 1.0  # No compression for biases
+            }
+            info['bias_layers'].append(bias_info)
+            bias_offset += bias_size
+
+        return info
+
+    def get_projection_matrix(self) -> torch.Tensor:
+        """Get the global projection matrix."""
+        return self.P
+
+    def get_latent_for_weights(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Extract the latent vector for weight parameters from the full latent vector."""
+        z = self._to_tensor(z)
+        return z[:self._weight_latent_dim]
+
+    def get_latent_for_biases(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Extract the latent vector for bias parameters from the full latent vector."""
+        z = self._to_tensor(z)
+        return z[self._weight_latent_dim:]
+
+    def set_latent_for_weights(self, z: torch.Tensor,
+                              weight_latent: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Update the latent values for weight parameters in the full latent vector."""
+        weight_latent = self._to_tensor(weight_latent)
+        z_new = z.clone()
+        z_new[:self._weight_latent_dim] = weight_latent
+        return z_new
+
+    def set_latent_for_biases(self, z: torch.Tensor,
+                             bias_latent: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Update the latent values for bias parameters in the full latent vector."""
+        bias_latent = self._to_tensor(bias_latent)
+        z_new = z.clone()
+        z_new[self._weight_latent_dim:] = bias_latent
+        return z_new
+
+
 def create_weight_sharing(model, args, optimizer_type=None):
     """
     Create a weight sharing instance based on the provided arguments.
@@ -2945,15 +3188,25 @@ def create_weight_sharing(model, args, optimizer_type=None):
         normalize = getattr(args, 'normalize_projection', False)
         d_strategy = getattr(args, 'd_strategy', 'uniform')
         ws = LayerwiseRandomProjection(
-            model=model, 
-            d=args.d, 
-            alpha=args.alpha, 
+            model=model,
+            d=args.d,
+            alpha=args.alpha,
             normalize=normalize,
             d_strategy=d_strategy,
             seed=seed,
             device=args.ws_device
         )
-    elif param_sharing_type == 'sparseproj':
+    elif param_sharing_type == 'dp2': # global random projection (single P for all weights)
+        normalize = getattr(args, 'normalize_projection', False)
+        ws = GlobalRandomProjection(
+            model=model,
+            d=args.d,
+            alpha=args.alpha,
+            normalize=normalize,
+            seed=seed,
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'sp':
         ws = SparseProjection(
             model=model, 
             d=args.d, 
