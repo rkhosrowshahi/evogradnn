@@ -372,7 +372,7 @@ def main(args):
     best_acc, best_loss = 0.0, 0.0
     epoch = 1
     step = 1
-    lr = 1.0
+    lr = args.lr
     while epoch <=  args.epochs:
         if scheduler is not None:
             lr = scheduler.get_lr()
@@ -443,145 +443,147 @@ def main(args):
         delta_norm = torch.norm(delta)
         print(f"delta at epoch {epoch}: {delta[:5]}")
         test_ce, test_top1, test_top5, test_f1 = 0, 0, 0, 0
-        
-        if args.bus.lower() == 'full':
-            theta_base = theta_t.clone()
-            ws.load_to_model(theta_base)
-            (theta_base_test_ce, 
-            theta_base_test_top1, 
-            theta_base_test_top5, 
-            theta_base_test_f1) = evaluate_model_on_test(model=ws.model, 
-                                                        data_loader=test_loader, 
-                                                        device=device, 
-                                                        train=False)
-            test_ce, test_top1, test_top5, test_f1 = theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1
-            ws.set_theta(theta_base)
-            ws.init()
-            
-            if optimizer_type == 'EA':
-                # Initialize population state
-                if args.pop_init == 'normal':
-                    init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
-                elif args.pop_init == 'uniform':
-                    init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
-                else:
-                    raise ValueError(f"Invalid initial distribution: {args.pop_init}")
-                init_population[0] = x0.copy()
-                init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
-                optimizer_state = optimizer.init(key=key, population=init_population, fitness=init_fitness, params=optimizer_params)
-            elif optimizer_type == 'ES':  # ES
-                optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
+        if epoch % args.bus_interval == 0:
+            if args.bus.lower() == 'full':
+                theta_base = theta_t.clone()
+                ws.load_to_model(theta_base)
+                (theta_base_test_ce, 
+                theta_base_test_top1, 
+                theta_base_test_top5, 
+                theta_base_test_f1) = evaluate_model_on_test(model=ws.model, 
+                                                            data_loader=test_loader, 
+                                                            device=device, 
+                                                            train=False)
+                test_ce, test_top1, test_top5, test_f1 = theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1
+                ws.reset(theta_base)
                 
-        elif args.bus.lower() == 'ema':
-            theta_base = theta_base + lr * delta
-            ws.load_to_model(theta_base)
-            (theta_base_test_ce, 
-            theta_base_test_top1, 
-            theta_base_test_top5, 
-            theta_base_test_f1) = evaluate_model_on_test(model=ws.model, 
-                                                        data_loader=test_loader, 
-                                                        device=device, 
-                                                        train=False)
-            test_ce, test_top1, test_top5, test_f1 = theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1
-            ws.set_theta(theta_base)
-            ws.init()
-            
-            if optimizer_type == 'EA':
-                # Initialize population state
-                if args.pop_init == 'normal':
-                    init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
-                elif args.pop_init == 'uniform':
-                    init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
-                else:
-                    raise ValueError(f"Invalid initial distribution: {args.pop_init}")
-                init_population[0] = x0.copy()
-                init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
-                optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
-            elif optimizer_type == 'ES':  # ES
-                optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
-                
-        elif args.bus.lower() == 'ema_with_momentum':
-            velocity = args.momentum * velocity + (1 - args.momentum) * delta
-            theta_base = theta_base + lr * velocity
-            ws.load_to_model(theta_base)
-            (theta_base_test_ce, 
-            theta_base_test_top1, 
-            theta_base_test_top5, 
-            theta_base_test_f1) = evaluate_model_on_test(model=ws.model, 
-                                                        data_loader=test_loader, 
-                                                        device=device, 
-                                                        train=False)
-            test_ce, test_top1, test_top5, test_f1 = theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1
-            ws.set_theta(theta_base)
-            ws.init()
-            
-            if optimizer_type == 'EA':
-                # Initialize population state
-                if args.pop_init == 'normal':
-                    init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
-                elif args.pop_init == 'uniform':
-                    init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
-                else:
-                    raise ValueError(f"Invalid initial distribution: {args.pop_init}")
-                init_population[0] = x0.copy()
-                init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
-                optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
-            elif optimizer_type == 'ES':  # ES
-                optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
-                
-        elif args.bus.lower() == 'ema_with_init_optimizer_state_and_update_mean':
-            theta_base = theta_base + lr * delta
-            ws.load_to_model(theta_base)
-            (theta_base_test_ce, 
-            theta_base_test_top1, 
-            theta_base_test_top5, 
-            theta_base_test_f1) = evaluate_model_on_test(model=ws.model, 
-                                                        data_loader=test_loader, 
-                                                        device=device, 
-                                                        train=False)
-            test_ce, test_top1, test_top5, test_f1 = theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1
-            ws.set_theta(theta_base)
-            # Align ES mean with new base theta without resetting ES state.
-            # For linear mappings (randproj/sparseproj): theta = theta_base + alpha * P @ z
-            # We compensate base shift Δtheta_base = lr * delta by Δz = - (alpha * P)^+ Δtheta_base
-            try:
-                if hasattr(ws, 'P') and ws.P is not None:
-                    A = ws.alpha * ws.P  # (D, d)
-                    delta_theta_base = (lr * delta).to(A.device).float()  # (D,)
-                    # Minimal-norm latent shift
-                    pinvA = torch.linalg.pinv(A)  # (d, D)
-                    delta_z_t = -(pinvA @ delta_theta_base)  # (d,)
-                    delta_z_np = delta_z_t.detach().cpu().numpy()
+                if optimizer_type == 'EA':
+                    # Initialize population state
+                    if args.pop_init == 'normal':
+                        init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+                    elif args.pop_init == 'uniform':
+                        init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                    else:
+                        raise ValueError(f"Invalid initial distribution: {args.pop_init}")
+                    init_population[0] = x0.copy()
+                    init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
+                    optimizer_state = optimizer.init(key=key, population=init_population, fitness=init_fitness, params=optimizer_params)
+                elif optimizer_type == 'ES':  # ES
+                    optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
                     
-                    if optimizer_type == 'EA':
-                        # Initialize population state
-                        if args.pop_init == 'normal':
-                            init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
-                        elif args.pop_init == 'uniform':
-                            init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
-                        else:
-                            raise ValueError(f"Invalid initial distribution: {args.pop_init}")
-                        init_population[0] = x0.copy()
-                        init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
-                        optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
-                    elif optimizer_type == 'ES':  # ES
-                        optimizer_state = optimizer.init(key=key, mean=zt + delta_z_np, params=optimizer_params)
-            except Exception as e:
-                print(f"Skipping Δz mean-translation due to error: {e}")
+            elif args.bus.lower() == 'ema':
+                theta_base = theta_base + lr * delta
+                ws.load_to_model(theta_base)
+                (theta_base_test_ce, 
+                theta_base_test_top1, 
+                theta_base_test_top5, 
+                theta_base_test_f1) = evaluate_model_on_test(model=ws.model, 
+                                                            data_loader=test_loader, 
+                                                            device=device, 
+                                                            train=False)
+                test_ce, test_top1, test_top5, test_f1 = theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1
+
+                ws.reset(theta_base)
                 
-        elif args.bus.lower() == 'none':
-            test_ce, test_top1, test_top5, test_f1 = theta_t_test_ce, theta_t_test_top1, theta_t_test_top5, theta_t_test_f1
+                if optimizer_type == 'EA':
+                    # Initialize population state
+                    if args.pop_init == 'normal':
+                        init_population = np.random.normal(x0, args.pop_init_std, size=(args.popsize, d))
+                    elif args.pop_init == 'uniform':
+                        init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                    elif args.pop_init == 'zeros':
+                        init_population = np.zeros((args.popsize, d))
+                    else:
+                        raise ValueError(f"Invalid initial distribution: {args.pop_init}")
+                    init_population[0] = x0.copy()
+                    init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
+                    optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
+                elif optimizer_type == 'ES':  # ES
+                    optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
+                    
+            elif args.bus.lower() == 'ema_with_momentum':
+                velocity = args.momentum * velocity + (1 - args.momentum) * delta
+                theta_base = theta_base + lr * velocity
+                ws.load_to_model(theta_base)
+                (theta_base_test_ce, 
+                theta_base_test_top1, 
+                theta_base_test_top5, 
+                theta_base_test_f1) = evaluate_model_on_test(model=ws.model, 
+                                                            data_loader=test_loader, 
+                                                            device=device, 
+                                                            train=False)
+                test_ce, test_top1, test_top5, test_f1 = theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1
+                ws.reset(theta_base)
+                
+                if optimizer_type == 'EA':
+                    # Initialize population state
+                    if args.pop_init == 'normal':
+                        init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+                    elif args.pop_init == 'uniform':
+                        init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                    else:
+                        raise ValueError(f"Invalid initial distribution: {args.pop_init}")
+                    init_population[0] = x0.copy()
+                    init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
+                    optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
+                elif optimizer_type == 'ES':  # ES
+                    optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
+                    
+            elif args.bus.lower() == 'ema_with_init_optimizer_state_and_update_mean':
+                theta_base = theta_base + lr * delta
+                ws.load_to_model(theta_base)
+                (theta_base_test_ce, 
+                theta_base_test_top1, 
+                theta_base_test_top5, 
+                theta_base_test_f1) = evaluate_model_on_test(model=ws.model, 
+                                                            data_loader=test_loader, 
+                                                            device=device, 
+                                                            train=False)
+                test_ce, test_top1, test_top5, test_f1 = theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1
+                ws.set_theta(theta_base)
+                # Align ES mean with new base theta without resetting ES state.
+                # For linear mappings (randproj/sparseproj): theta = theta_base + alpha * P @ z
+                # We compensate base shift Δtheta_base = lr * delta by Δz = - (alpha * P)^+ Δtheta_base
+                try:
+                    if hasattr(ws, 'P') and ws.P is not None:
+                        A = ws.alpha * ws.P  # (D, d)
+                        delta_theta_base = (lr * delta).to(A.device).float()  # (D,)
+                        # Minimal-norm latent shift
+                        pinvA = torch.linalg.pinv(A)  # (d, D)
+                        delta_z_t = -(pinvA @ delta_theta_base)  # (d,)
+                        delta_z_np = delta_z_t.detach().cpu().numpy()
+                        
+                        if optimizer_type == 'EA':
+                            # Initialize population state
+                            if args.pop_init == 'normal':
+                                init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+                            elif args.pop_init == 'uniform':
+                                init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                            else:
+                                raise ValueError(f"Invalid initial distribution: {args.pop_init}")
+                            init_population[0] = x0.copy()
+                            init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
+                            optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
+                        elif optimizer_type == 'ES':  # ES
+                            optimizer_state = optimizer.init(key=key, mean=zt + delta_z_np, params=optimizer_params)
+                except Exception as e:
+                    print(f"Skipping Δz mean-translation due to error: {e}")
+                
+            elif args.bus.lower() == 'none':
+                test_ce, test_top1, test_top5, test_f1 = theta_t_test_ce, theta_t_test_top1, theta_t_test_top5, theta_t_test_f1
+            else:
+                theta_base = ws.theta_base
+                ws.load_to_model(theta_base)
+                (theta_base_test_ce, 
+                theta_base_test_top1, 
+                theta_base_test_top5, 
+                theta_base_test_f1) = evaluate_model_on_test(model=ws.model, 
+                                                            data_loader=test_loader, 
+                                                            device=device, 
+                                                            train=False)
+                test_ce, test_top1, test_top5, test_f1 = theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1
         else:
-            theta_base = ws.theta_base
-            ws.load_to_model(theta_base)
-            (theta_base_test_ce, 
-            theta_base_test_top1, 
-            theta_base_test_top5, 
-            theta_base_test_f1) = evaluate_model_on_test(model=ws.model, 
-                                                        data_loader=test_loader, 
-                                                        device=device, 
-                                                        train=False)
-            test_ce, test_top1, test_top5, test_f1 = theta_base_test_ce, theta_base_test_top1, theta_base_test_top5, theta_base_test_f1
+            test_ce, test_top1, test_top5, test_f1 = theta_t_test_ce, theta_t_test_top1, theta_t_test_top5, theta_t_test_f1
 
         print(f"theta_base at epoch {epoch}: {theta_base[:5]}")
 
@@ -654,8 +656,8 @@ if __name__ == "__main__":
                        help='Validation split for training')
     parser.add_argument('--sampler', type=str, default=None,
                        help='Sampler for training')
-    parser.add_argument('--criterion', type=str, default='ce', choices=['ce', 'mse', 'f1', 'soft_f1', 'ce_sf1'],
-                       help='Loss function: ce (cross-entropy), f1 (F1 score), soft_f1 (soft F1), or ce_sf1 (CE + soft F1)')
+    parser.add_argument('--criterion', type=str, default='ce', choices=['ce', 'cm', 'mse', 'f1', 'soft_f1', 'ce_sf1'],
+                       help='Loss function: ce (cross-entropy), cm (confidence margin), mse (mean squared error), f1 (F1 score), soft_f1 (soft F1), or ce_sf1 (CE + soft F1)')
     
     # ============================================================================
     # Training Hyperparameters
@@ -743,6 +745,8 @@ if __name__ == "__main__":
                        help='Weight sharing strategy (e.g., randproj, mlp, hard)', required=True)
     parser.add_argument('--bus', type=str, default='none',
                        help='Base update strategy (BUS) for weight sharing: none, full, ema, ema_with_momentum, ema_with_init_optimizer_state_and_update_mean, or ema_in_es_loop')
+    parser.add_argument('--bus_interval', type=int, default=1,
+                       help='Interval for base update strategy')
     parser.add_argument('--alpha', type=float, default=1.0,
                        help='Scaling factor for weight sharing')
     parser.add_argument('--normalize_projection', action='store_true',

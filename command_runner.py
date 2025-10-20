@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 import json
+import yaml
 
 
 @dataclass
@@ -261,9 +262,11 @@ class CommandRunner:
 
 
 def load_commands_from_file(filename: str) -> List[str]:
-    """Load commands from a text file (one command per line) or JSON config"""
+    """Load commands from a text file (one command per line), JSON config, or YAML config"""
     if filename.endswith('.json'):
         return load_commands_from_json(filename)
+    elif filename.endswith('.yaml') or filename.endswith('.yml'):
+        return load_commands_from_yaml(filename)
     
     with open(filename, 'r') as f:
         commands = [line.strip() for line in f if line.strip() and not line.startswith('#')]
@@ -274,6 +277,21 @@ def load_commands_from_json(filename: str) -> List[str]:
     """Load commands from a JSON configuration file"""
     with open(filename, 'r') as f:
         config = json.load(f)
+    
+    commands = []
+    for cmd_config in config.get('commands', []):
+        if isinstance(cmd_config, dict):
+            commands.append(cmd_config['command'])
+        else:
+            commands.append(str(cmd_config))
+    
+    return commands
+
+
+def load_commands_from_yaml(filename: str) -> List[str]:
+    """Load commands from a YAML configuration file"""
+    with open(filename, 'r') as f:
+        config = yaml.safe_load(f)
     
     commands = []
     for cmd_config in config.get('commands', []):

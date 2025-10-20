@@ -1833,6 +1833,81 @@ def plot_param_distribution(x, save_path):
     plt.close()
 
 
+class ConfidenceMarginLoss(nn.Module):
+    def __init__(self, num_classes: int):
+        super().__init__()
+        self.num_classes = num_classes
+        
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        softmax_output = F.softmax(input, dim=1)
+        
+        # Get the probability of the target class (correct indexing)
+        batch_size = target.size(0)
+        p_target = softmax_output[torch.arange(batch_size, device=input.device), target]
+        
+        # Mask out the target class to find the maximum probability among incorrect classes
+        mask = torch.ones_like(softmax_output, dtype=torch.bool)
+        mask[torch.arange(batch_size, device=input.device), target] = False
+        p_max_incorrect = softmax_output[mask].view(batch_size, -1).max(dim=1)[0]
+        
+        # Margin-based cross-entropy:
+        # We want to maximize p_c while minimizing p_max_incorrect
+        # 
+        # Loss components:
+        # 1. -log(p_c): standard cross-entropy (encourages high p_c)
+        # 2. -log(1 - p_max_incorrect): penalizes high incorrect probabilities
+        # 
+        # Combined: -log(p_c) - log(1 - p_max_incorrect)
+        #         = -log(p_c * (1 - p_max_incorrect))
+        # 
+        # Properties:
+        # - Always positive (log of probability)
+        # - Unbounded above (good for ranking)
+        # - When p_c→1 and p_max_incorrect→0: loss→0 (perfect)
+        # - When p_c is low OR p_max_incorrect is high: loss is large
+        eps = 1e-7
+        loss = -torch.log(p_target + eps) - torch.log(1 - p_max_incorrect + eps)
+        
+        return loss.mean()
+
+
+class TotalIncorrectPenaltyLoss(nn.Module):
+    """
+    Loss function that maximizes target class probability while minimizing 
+    the sum of all incorrect class probabilities.
+    
+    Loss = -log(p_c) + sum_{i≠c} p_i
+         = -log(p_c) + (1 - p_c)
+    
+    This provides:
+    - Logarithmic encouragement for high p_c (unbounded as p_c → 0)
+    - Linear penalty for incorrect probabilities (bounded between 0 and 1)
+    - Good dynamic range for CMA-ES ranking
+    """
+    def __init__(self, num_classes: int):
+        super().__init__()
+        self.num_classes = num_classes
+        
+    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        softmax_output = F.softmax(input, dim=1)
+        
+        # Get the probability of the target class
+        batch_size = target.size(0)
+        p_target = softmax_output[torch.arange(batch_size, device=input.device), target]
+        
+        # Sum of all incorrect class probabilities
+        # Since sum of all probabilities = 1, sum of incorrect = 1 - p_target
+        sum_incorrect = 1 - p_target
+        
+        # Loss: cross-entropy term + linear penalty on incorrect probabilities
+        # -log(p_c) encourages high target probability (unbounded)
+        # sum_{i≠c} p_i = (1 - p_c) penalizes incorrect probabilities (bounded)
+        eps = 1e-7
+        loss = -torch.log(p_target + eps) + sum_incorrect
+        
+        return loss.mean()
+
+
 def create_criterion(args, num_classes):
     """
     Create a loss criterion and optionally a new train loader with weighted sampling.
@@ -1866,6 +1941,15 @@ def create_criterion(args, num_classes):
             average="micro",
             loss=True,
             temperature=args.f1_temperature,
+        )
+    elif criterion_type == 'cm':
+        criterion = ConfidenceMarginLoss(
+            num_classes=num_classes
+        )
+    
+    elif criterion_type == 'tip':
+        criterion = TotalIncorrectPenaltyLoss(
+            num_classes=num_classes
         )
         
     elif criterion_type == 'ce_sf1':

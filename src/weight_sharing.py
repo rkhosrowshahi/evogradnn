@@ -39,7 +39,7 @@ class ParameterSharing(nn.Module):
             d: Number of shared parameters (latent dimension K).
             alpha: Scaling factor for parameters.
             device: Device for PyTorch computations.
-            seed: Random seed for reproducible initialization.
+            seed: Random seed for reproducible initialize.
         """
         super().__init__()
         self.device = device
@@ -97,6 +97,11 @@ class ParameterSharing(nn.Module):
         z = self._to_tensor(z)
         x = z[self.assignments]
         return self.process(x)
+
+    def reset(self, theta_base: Union[np.ndarray, torch.Tensor]) -> None:
+        """Reset the weight sharing to initial state."""
+        self.set_theta(theta_base)
+        self.initialize()
     
     def _to_tensor(self, x: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
         """Convert input to torch tensor on correct device."""
@@ -158,9 +163,9 @@ class RandomProjectionSoftSharing(ParameterSharing):
     def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0, normalize: bool = False, device: str = 'cuda', seed: int = 0) -> None:
         super().__init__(model, d, alpha, device, seed)
         self.normalize = normalize
-        self.init()
+        self.initialize()
 
-    def init(self) -> torch.Tensor:
+    def initialize(self) -> torch.Tensor:
         """
         Initialize the random projection matrix with seed.
         
@@ -245,13 +250,13 @@ class RandomFourierFeaturesSoftSharing(ParameterSharing):
             d: Number of shared parameters (latent dimension).
             sigma: Standard deviation for omega sampling (1/sigma^2 is the variance).
             device: Device for PyTorch computations.
-            seed: Random seed for reproducible initialization.
+            seed: Random seed for reproducible initialize.
         """
         super().__init__(model, d, alpha, device, seed)
         self.sigma = sigma
-        self.init()
+        self.initialize()
 
-    def init(self) -> None:
+    def initialize(self) -> None:
         """
         Initialize Random Fourier Features parameters with seed.
         
@@ -333,11 +338,11 @@ class MLPSoftSharing(ParameterSharing):
         else:
             self.activation_function = None
         self.decoder = None
-        self.init()
+        self.initialize()
 
-    def init(self) -> None:
+    def initialize(self) -> None:
         """
-        Initialize decoder weights using He normal initialization.
+        Initialize decoder weights using He normal initialize.
         
         Each layer is initialized with standard deviation sqrt(1/fan_in)
         to maintain reasonable activation magnitudes.
@@ -410,7 +415,7 @@ class HyperNetworkSoftSharing(ParameterSharing):
         - d: int (number of shared parameters)
         - Scaling factor alpha: float
         - Hidden dimensions: List[int] (number of hidden dimensions)
-        - Embedding initialization: str (embedding initialization)
+        - Embedding initialize: str (embedding initialize)
     
     Output types:
         - Full parameter vector: torch.Tensor of shape (D,) where D is the
@@ -433,7 +438,7 @@ class HyperNetworkSoftSharing(ParameterSharing):
         self.embed_dim = 16
 
         if emb_init == "random":
-            # Option 1: Random initialization with seed
+            # Option 1: Random initialize with seed
             embeddings = torch.randn(self.num_layers, self.embed_dim, device=device) * 0.1
             self.register_parameter('embeddings', nn.Parameter(embeddings))
         elif emb_init == "sinusoidal":
@@ -655,11 +660,11 @@ class HardWeightSharing(ParameterSharing):
         super().__init__(model, d, alpha, device, seed)
         self.assignment_strategy = assignment_strategy
         
-        self._init_assignments()
+        self.initialize()
         
         print(self.count_block_sizes())
     
-    def _init_assignments(self) -> None:
+    def initialize(self) -> None:
         """Initialize parameter assignments to blocks."""
         if self.assignment_strategy == 'random':
             # Random assignment with seed
@@ -743,7 +748,7 @@ class LayerwiseHardWeightSharing(ParameterSharing):
         # self.d = self.k * self.num_layers
         
         # Initialize layer-wise assignments
-        self._init_layerwise_assignments()
+        self.initialize()
         
         print(f"LayerwiseHardWeightSharing initialized:")
         print(f"  - Number of layers: {self.num_layers}")
@@ -782,7 +787,7 @@ class LayerwiseHardWeightSharing(ParameterSharing):
         # Total blocks = sum of blocks across all layers (not just k * num_layers)
         self.d = sum(self.layer_blocks)
         
-    def _init_layerwise_assignments(self) -> None:
+    def initialize(self) -> None:
         """Initialize parameter assignments to layer-specific blocks."""
         assignments = torch.zeros(self.D, dtype=torch.long, device=self.device)
         
@@ -878,6 +883,12 @@ class LayerwiseHardWeightSharing(ParameterSharing):
         if self.d < old_d:
             print(f"  Total blocks reduced from {old_d} to {self.d} (removed {old_d - self.d} unused blocks)")
     
+    def reset(self, theta_base: Union[np.ndarray, torch.Tensor]) -> None:
+        """Reset the weight sharing to initial state."""
+        self.set_theta(theta_base)
+        # Do not reset assignments due to change in dimensions.
+        # TODO: without dimension change, reset assignments. OR reset assignments and reset d in optimizer. OR update assignment with clustering and again reset d in optimizer.
+
     def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
         """
         Map latent vector (blocks) to full parameter space using layerwise hard assignment.
@@ -972,6 +983,831 @@ class LayerwiseHardWeightSharing(ParameterSharing):
         layer_block_start = self.block_offsets[layer_idx].item()
         layer_block_end = self.block_offsets[layer_idx + 1].item()
         z_new[layer_block_start:layer_block_end] = layer_blocks
+        return z_new
+
+
+class LayerwiseHardWeightSharingV2(ParameterSharing):
+    """
+    Layerwise Hard Weight Sharing V2: Weight layers get individual blocks, all biases share blocks.
+    
+    This version differs from V1 by grouping all bias parameters together into a single set of k blocks,
+    while each weight layer still gets its own k blocks.
+    
+    Structure:
+    - Weight layer 1: k blocks
+    - Weight layer 2: k blocks
+    - ...
+    - Weight layer L: k blocks
+    - ALL biases combined: k blocks
+    
+    Total number of blocks = (num_weight_layers * k) + k
+    
+    Args:
+        model: PyTorch model
+        d: Number of blocks per layer (k)
+        seed: Random seed for reproducible assignment generation
+        alpha: Scaling factor for parameters
+        device: Device for computations
+        assignment_strategy: How to initialize assignments within each layer ('random', 'uniform')
+    """
+    
+    def __init__(self, model: torch.nn.Module, d: int, seed: int = 0,
+                 alpha: float = 1.0, device: str = 'cuda', 
+                 assignment_strategy: str = 'random') -> None:
+
+        super().__init__(model, d, alpha, device, seed)
+        
+        self.k = d  # Blocks per layer
+        self.assignment_strategy = assignment_strategy
+        
+        # Extract layer information (separating weights and biases)
+        self._extract_layer_info()
+        
+        # Initialize layer-wise assignments
+        self.initialize()
+        
+        print(f"LayerwiseHardWeightSharingV2 initialized:")
+        print(f"  - Number of weight layers: {self.num_weight_layers}")
+        print(f"  - Number of bias parameters: {self.num_bias_params}")
+        print(f"  - Total bias size: {self.total_bias_size}")
+        print(f"  - Blocks per layer (k): {self.k}")
+        print(f"  - Total blocks (d): {self.d}")
+        print(f"  - Total parameters (D): {self.D}")
+        print(f"  - Compression ratio: {self.get_compression_ratio():.2f}")
+        print(self.count_block_sizes())
+    
+    def _extract_layer_info(self) -> None:
+        """Extract layer boundaries, separating weights and biases."""
+        self.weight_boundaries = []  # List of (start_idx, end_idx) for weight layers
+        self.weight_sizes = []  # Number of parameters in each weight layer
+        self.weight_layer_names = []  # Names of weight layers
+        
+        self.bias_boundaries = []  # List of (start_idx, end_idx) for bias layers
+        self.bias_sizes = []  # Number of parameters in each bias layer
+        self.bias_layer_names = []  # Names of bias layers
+        
+        start_idx = 0
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                layer_size = param.numel()
+                end_idx = start_idx + layer_size
+                
+                is_bias = 'bias' in name
+                
+                if is_bias:
+                    self.bias_boundaries.append((start_idx, end_idx))
+                    self.bias_sizes.append(layer_size)
+                    self.bias_layer_names.append(name)
+                else:
+                    self.weight_boundaries.append((start_idx, end_idx))
+                    self.weight_sizes.append(layer_size)
+                    self.weight_layer_names.append(name)
+                
+                start_idx = end_idx
+        
+        self.num_weight_layers = len(self.weight_boundaries)
+        self.num_bias_params = len(self.bias_boundaries)
+        self.total_bias_size = sum(self.bias_sizes)
+        
+        # Total blocks = (num_weight_layers * k) + k (for all biases)
+        self.d = self.num_weight_layers * self.k + self.k
+        
+        # Store layer information for easier access
+        self.layer_info = {
+            'weights': {
+                name: {'size': size, 'blocks': self.k, 'is_bias': False}
+                for name, size in zip(self.weight_layer_names, self.weight_sizes)
+            },
+            'biases': {
+                'all_biases': {'size': self.total_bias_size, 'blocks': self.k, 'is_bias': True}
+            }
+        }
+        
+    def initialize(self) -> None:
+        """Initialize parameter assignments to layer-specific blocks."""
+        assignments = torch.zeros(self.D, dtype=torch.long, device=self.device)
+        
+        # Block offset tracking
+        # First blocks are for weight layers, last k blocks are for all biases
+        current_block_offset = 0
+        
+        # Assign weight layers
+        for layer_idx, (start, end) in enumerate(self.weight_boundaries):
+            layer_size = end - start
+            layer_block_start = current_block_offset
+            layer_block_end = current_block_offset + self.k
+            
+            if self.assignment_strategy == 'random':
+                # Balanced random assignment: ensure all blocks are used
+                layer_assignments = self._balanced_random_assignment(
+                    layer_size, layer_block_start, layer_block_end
+                )
+            elif self.assignment_strategy == 'uniform':
+                # Uniform distribution across layer's blocks
+                layer_assignments = torch.arange(layer_size, device=self.device) % self.k
+                layer_assignments += layer_block_start
+            else:
+                raise ValueError(f"Unknown assignment strategy: {self.assignment_strategy}")
+            
+            assignments[start:end] = layer_assignments
+            current_block_offset += self.k
+        
+        # Assign all biases to the last k blocks
+        bias_block_start = current_block_offset
+        bias_block_end = current_block_offset + self.k
+        
+        # Collect all bias parameters together
+        all_bias_params = []
+        for start, end in self.bias_boundaries:
+            all_bias_params.append(torch.arange(start, end, device=self.device))
+        
+        if all_bias_params:
+            all_bias_indices = torch.cat(all_bias_params)
+            total_bias_size = len(all_bias_indices)
+            
+            if self.assignment_strategy == 'random':
+                # Balanced random assignment: ensure all blocks are used
+                bias_assignments = self._balanced_random_assignment(
+                    total_bias_size, bias_block_start, bias_block_end
+                )
+                # Assign to the actual bias positions
+                for i, idx in enumerate(all_bias_indices):
+                    assignments[idx] = bias_assignments[i]
+            elif self.assignment_strategy == 'uniform':
+                # Uniform distribution across bias blocks
+                bias_assignments = torch.arange(total_bias_size, device=self.device) % self.k
+                bias_assignments += bias_block_start
+                # Assign to the actual bias positions
+                for i, idx in enumerate(all_bias_indices):
+                    assignments[idx] = bias_assignments[i]
+            else:
+                raise ValueError(f"Unknown assignment strategy: {self.assignment_strategy}")
+        
+        # Store block offsets for weights and biases
+        weight_block_offsets = list(range(0, self.num_weight_layers * self.k + 1, self.k))
+        bias_block_offset = self.num_weight_layers * self.k
+        
+        self.register_buffer('weight_block_offsets', 
+                            torch.tensor(weight_block_offsets, device=self.device))
+        self.register_buffer('bias_block_offset', 
+                            torch.tensor(bias_block_offset, device=self.device))
+        
+        # Store assignments as buffer (non-learnable)
+        self.register_buffer('assignments', assignments)
+    
+    def _balanced_random_assignment(self, num_params: int, block_start: int, block_end: int) -> torch.Tensor:
+        """
+        Create balanced random assignments that ensure all blocks are used.
+        
+        Strategy:
+        1. First, assign one parameter to each block (round-robin)
+        2. Then, randomly shuffle the assignments
+        
+        This guarantees all blocks get at least one parameter.
+        
+        Args:
+            num_params: Number of parameters to assign
+            block_start: Starting block index
+            block_end: Ending block index (exclusive)
+            
+        Returns:
+            Tensor of assignments of shape (num_params,)
+        """
+        num_blocks = block_end - block_start
+        
+        if num_params < num_blocks:
+            # If we have fewer parameters than blocks, just assign sequentially
+            assignments = torch.arange(block_start, block_start + num_params, device=self.device)
+        else:
+            # Create assignments that cycle through all blocks
+            # This ensures each block gets at least floor(num_params / num_blocks) parameters
+            assignments = torch.arange(num_params, device=self.device) % num_blocks
+            assignments += block_start
+            
+            # Shuffle to make it random while keeping all blocks used
+            perm = torch.randperm(num_params, device=self.device)
+            assignments = assignments[perm]
+        
+        return assignments
+    
+    def _recalculate_d_from_assignments(self) -> None:
+        """
+        Recalculate self.d based on unique blocks actually used in assignments.
+        
+        With random assignment, some blocks may not be assigned to any parameters.
+        This method counts unique blocks used and remaps assignments to be contiguous.
+        """
+        new_assignments = torch.zeros_like(self.assignments)
+        global_block_idx = 0
+        
+        # Process weight layers
+        new_weight_block_offsets = [0]
+        actual_weight_blocks = []
+        
+        for layer_idx, (start, end) in enumerate(self.weight_boundaries):
+            layer_block_start = self.weight_block_offsets[layer_idx].item()
+            layer_block_end = self.weight_block_offsets[layer_idx + 1].item()
+            
+            # Get assignments for this weight layer
+            layer_assignments = self.assignments[start:end]
+            
+            # Find unique blocks used in this layer (filtered to this layer's range)
+            layer_mask = (layer_assignments >= layer_block_start) & (layer_assignments < layer_block_end)
+            unique_blocks = torch.unique(layer_assignments[layer_mask])
+            num_unique = len(unique_blocks)
+            
+            # Create mapping from old block indices to new contiguous indices
+            old_to_new = {}
+            for new_idx, old_block in enumerate(unique_blocks):
+                old_to_new[old_block.item()] = global_block_idx + new_idx
+            
+            # Remap assignments for this layer
+            for i in range(start, end):
+                old_block = self.assignments[i].item()
+                if old_block in old_to_new:
+                    new_assignments[i] = old_to_new[old_block]
+            
+            # Update tracking
+            actual_weight_blocks.append(num_unique)
+            global_block_idx += num_unique
+            new_weight_block_offsets.append(global_block_idx)
+            
+            if num_unique < self.k:
+                layer_name = self.weight_layer_names[layer_idx]
+                print(f"  Weight layer '{layer_name}': {self.k} blocks allocated, {num_unique} actually used")
+        
+        # Process all biases together
+        bias_block_start = self.bias_block_offset.item()
+        bias_block_end = bias_block_start + self.k
+        
+        # Collect all bias assignments
+        all_bias_assignments = []
+        for start, end in self.bias_boundaries:
+            all_bias_assignments.append(self.assignments[start:end])
+        
+        if all_bias_assignments:
+            all_bias_assignments = torch.cat(all_bias_assignments)
+            
+            # Find unique blocks used in biases
+            bias_mask = (all_bias_assignments >= bias_block_start) & (all_bias_assignments < bias_block_end)
+            unique_bias_blocks = torch.unique(all_bias_assignments[bias_mask])
+            num_unique_bias = len(unique_bias_blocks)
+            
+            # Create mapping for bias blocks
+            old_to_new_bias = {}
+            for new_idx, old_block in enumerate(unique_bias_blocks):
+                old_to_new_bias[old_block.item()] = global_block_idx + new_idx
+            
+            # Remap bias assignments
+            for start, end in self.bias_boundaries:
+                for i in range(start, end):
+                    old_block = self.assignments[i].item()
+                    if old_block in old_to_new_bias:
+                        new_assignments[i] = old_to_new_bias[old_block]
+            
+            new_bias_block_offset = global_block_idx
+            global_block_idx += num_unique_bias
+            
+            if num_unique_bias < self.k:
+                print(f"  All biases: {self.k} blocks allocated, {num_unique_bias} actually used")
+        else:
+            new_bias_block_offset = global_block_idx
+            num_unique_bias = 0
+        
+        # Update all relevant attributes
+        old_d = self.d
+        self.d = global_block_idx
+        self.actual_weight_blocks = actual_weight_blocks
+        self.actual_bias_blocks = num_unique_bias
+        self.assignments = new_assignments
+        self.register_buffer('weight_block_offsets', 
+                            torch.tensor(new_weight_block_offsets, device=self.device))
+        self.register_buffer('bias_block_offset', 
+                            torch.tensor(new_bias_block_offset, device=self.device))
+        
+        if self.d < old_d:
+            print(f"  Total blocks reduced from {old_d} to {self.d} (removed {old_d - self.d} unused blocks)")
+    
+    # def reset(self, theta_base: Union[np.ndarray, torch.Tensor]) -> None:
+    #     """Reset the weight sharing to initial state."""
+    #     self.set_theta(theta_base)
+    #     # Do not reset assignments due to change in dimensions.
+
+    def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """
+        Map latent vector (blocks) to full parameter space.
+        
+        Args:
+            z: Blocks vector of shape (d,) where d = (num_weight_layers * k) + k
+               The blocks are organized as:
+               - First k blocks: weight layer 0
+               - Next k blocks: weight layer 1
+               - ...
+               - Last k blocks: all biases
+            
+        Returns:
+            Full parameter tensor of shape (D,) where each position gets the value
+            from its assigned block: theta[i] = z[assignments[i]]
+        """
+        z = self._to_tensor(z)
+        
+        # Validate input dimension
+        if z.shape[0] != self.d:
+            raise ValueError(f"Expected latent vector of size {self.d}, got {z.shape[0]}")
+        
+        # Use the input z as the blocks values and look up based on assignments
+        x = z[self.assignments]
+        x = self.process(x)
+        return self.theta_base + x
+    
+    def count_block_sizes(self) -> dict:
+        """Return how many parameters are assigned to each block, organized by layer."""
+        block_usage = {}
+        
+        # Count for weight layers
+        for layer_idx, layer_name in enumerate(self.weight_layer_names):
+            start, end = self.weight_boundaries[layer_idx]
+            layer_block_start = self.weight_block_offsets[layer_idx].item()
+            layer_block_end = self.weight_block_offsets[layer_idx + 1].item()
+            num_layer_blocks = layer_block_end - layer_block_start
+            
+            layer_usage = torch.zeros(num_layer_blocks, device=self.device)
+            for local_block_idx in range(num_layer_blocks):
+                global_block_idx = layer_block_start + local_block_idx
+                layer_usage[local_block_idx] = (self.assignments[start:end] == global_block_idx).sum()
+            
+            block_usage[layer_name] = layer_usage.cpu().numpy()
+        
+        # Count for all biases together
+        if self.bias_boundaries:
+            bias_block_start = self.bias_block_offset.item()
+            bias_block_end = self.d  # All remaining blocks are for biases
+            num_bias_blocks = bias_block_end - bias_block_start
+            
+            bias_usage = torch.zeros(num_bias_blocks, device=self.device)
+            for local_block_idx in range(num_bias_blocks):
+                global_block_idx = bias_block_start + local_block_idx
+                # Count across all bias parameters
+                count = 0
+                for start, end in self.bias_boundaries:
+                    count += (self.assignments[start:end] == global_block_idx).sum()
+                bias_usage[local_block_idx] = count
+            
+            block_usage['all_biases'] = bias_usage.cpu().numpy()
+        
+        return block_usage
+    
+    def get_compression_ratio(self) -> float:
+        """Return the compression ratio achieved by the blocks."""
+        return self.D / self.d
+    
+    def get_layer_info(self) -> dict:
+        """Return detailed information about layer structure."""
+        info = {
+            'num_weight_layers': self.num_weight_layers,
+            'num_bias_params': self.num_bias_params,
+            'total_bias_size': self.total_bias_size,
+            'blocks_per_layer_k': self.k,
+            'total_blocks': self.d,
+            'total_parameters': self.D,
+            'compression_ratio': self.get_compression_ratio(),
+            'weight_layers': [],
+            'bias_info': None
+        }
+        
+        # Weight layers info
+        for layer_idx, layer_name in enumerate(self.weight_layer_names):
+            start, end = self.weight_boundaries[layer_idx]
+            layer_size = end - start
+            layer_block_start = self.weight_block_offsets[layer_idx].item()
+            layer_block_end = self.weight_block_offsets[layer_idx + 1].item()
+            num_layer_blocks = layer_block_end - layer_block_start
+            
+            layer_info = {
+                'name': layer_name,
+                'layer_idx': layer_idx,
+                'param_range': (start, end),
+                'param_size': layer_size,
+                'block_range': (layer_block_start, layer_block_end),
+                'num_blocks': num_layer_blocks,
+                'layer_compression_ratio': layer_size / num_layer_blocks if num_layer_blocks > 0 else 0
+            }
+            info['weight_layers'].append(layer_info)
+        
+        # Bias info
+        if self.bias_boundaries:
+            bias_block_start = self.bias_block_offset.item()
+            bias_block_end = self.d
+            num_bias_blocks = bias_block_end - bias_block_start
+            
+            info['bias_info'] = {
+                'total_size': self.total_bias_size,
+                'num_bias_params': self.num_bias_params,
+                'block_range': (bias_block_start, bias_block_end),
+                'num_blocks': num_bias_blocks,
+                'compression_ratio': self.total_bias_size / num_bias_blocks if num_bias_blocks > 0 else 0
+            }
+        
+        return info
+    
+    def get_blocks_for_weight_layer(self, layer_idx: int, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Extract the block values for a specific weight layer from the latent vector."""
+        z = self._to_tensor(z)
+        layer_block_start = self.weight_block_offsets[layer_idx].item()
+        layer_block_end = self.weight_block_offsets[layer_idx + 1].item()
+        return z[layer_block_start:layer_block_end]
+    
+    def get_blocks_for_biases(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Extract the block values for all biases from the latent vector."""
+        z = self._to_tensor(z)
+        bias_block_start = self.bias_block_offset.item()
+        return z[bias_block_start:]
+    
+    def set_blocks_for_weight_layer(self, layer_idx: int, z: torch.Tensor, 
+                                   layer_blocks: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Update the block values for a specific weight layer in the latent vector."""
+        layer_blocks = self._to_tensor(layer_blocks)
+        z_new = z.clone()
+        layer_block_start = self.weight_block_offsets[layer_idx].item()
+        layer_block_end = self.weight_block_offsets[layer_idx + 1].item()
+        z_new[layer_block_start:layer_block_end] = layer_blocks
+        return z_new
+    
+    def set_blocks_for_biases(self, z: torch.Tensor, 
+                             bias_blocks: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Update the block values for all biases in the latent vector."""
+        bias_blocks = self._to_tensor(bias_blocks)
+        z_new = z.clone()
+        bias_block_start = self.bias_block_offset.item()
+        z_new[bias_block_start:] = bias_blocks
+        return z_new
+
+
+class LayerwiseHardWeightSharingV3(ParameterSharing):
+    """
+    Layerwise Hard Weight Sharing V3: Weight layers get d blocks each, each bias parameter is its own block.
+    
+    This version differs from V2 by giving each bias parameter its own individual block (no sharing among biases),
+    while each weight layer still gets d blocks with parameter sharing within the layer.
+    
+    Structure:
+    - Weight layer 1: d blocks (parameters in layer share these d blocks)
+    - Weight layer 2: d blocks (parameters in layer share these d blocks)
+    - ...
+    - Weight layer L: d blocks (parameters in layer share these d blocks)
+    - Bias parameters: each bias parameter gets its own block (identity mapping, no sharing)
+    
+    Total number of blocks = (num_weight_layers * d) + total_bias_size
+    Where:
+    - num_weight_layers (l) = number of weight layers
+    - d = blocks per weight layer
+    - total_bias_size (b) = total number of bias parameters
+    
+    Formula: total_blocks = l * d + b
+    
+    Args:
+        model: PyTorch model
+        d: Number of blocks per weight layer
+        seed: Random seed for reproducible assignment generation
+        alpha: Scaling factor for parameters
+        device: Device for computations
+        assignment_strategy: How to initialize assignments within each weight layer ('random', 'uniform')
+    """
+    
+    def __init__(self, model: torch.nn.Module, d: int, seed: int = 0,
+                 alpha: float = 1.0, device: str = 'cuda', 
+                 assignment_strategy: str = 'random') -> None:
+
+        super().__init__(model, d, alpha, device, seed)
+        
+        self.k = d  # Blocks per weight layer
+        self.assignment_strategy = assignment_strategy
+        
+        # Extract layer information (separating weights and biases)
+        self._extract_layer_info()
+        
+        # Initialize layer-wise assignments
+        self.initialize()
+        
+        print(f"LayerwiseHardWeightSharingV3 initialized:")
+        print(f"  - Number of weight layers (l): {self.num_weight_layers}")
+        print(f"  - Blocks per weight layer (d): {self.k}")
+        print(f"  - Number of bias parameters (b): {self.total_bias_size}")
+        print(f"  - Total blocks (l*d + b): {self.d} = {self.num_weight_layers}*{self.k} + {self.total_bias_size}")
+        print(f"  - Total parameters (D): {self.D}")
+        print(f"  - Compression ratio: {self.get_compression_ratio():.2f}")
+        print(self.count_block_sizes())
+    
+    def _extract_layer_info(self) -> None:
+        """Extract layer boundaries, separating weights and biases."""
+        self.weight_boundaries = []  # List of (start_idx, end_idx) for weight layers
+        self.weight_sizes = []  # Number of parameters in each weight layer
+        self.weight_layer_names = []  # Names of weight layers
+        
+        self.bias_boundaries = []  # List of (start_idx, end_idx) for bias layers
+        self.bias_sizes = []  # Number of parameters in each bias layer
+        self.bias_layer_names = []  # Names of bias layers
+        
+        start_idx = 0
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                layer_size = param.numel()
+                end_idx = start_idx + layer_size
+                
+                is_bias = 'bias' in name
+                
+                if is_bias:
+                    self.bias_boundaries.append((start_idx, end_idx))
+                    self.bias_sizes.append(layer_size)
+                    self.bias_layer_names.append(name)
+                else:
+                    self.weight_boundaries.append((start_idx, end_idx))
+                    self.weight_sizes.append(layer_size)
+                    self.weight_layer_names.append(name)
+                
+                start_idx = end_idx
+        
+        self.num_weight_layers = len(self.weight_boundaries)
+        self.num_bias_params = len(self.bias_boundaries)
+        self.total_bias_size = sum(self.bias_sizes)
+        
+        # Total blocks = (num_weight_layers * d) + total_bias_size
+        # Formula: l * d + b
+        self.d = self.num_weight_layers * self.k + self.total_bias_size
+        
+        # Store layer information for easier access
+        self.layer_info = {
+            'weights': {
+                name: {'size': size, 'blocks': self.k, 'is_bias': False}
+                for name, size in zip(self.weight_layer_names, self.weight_sizes)
+            },
+            'biases': {
+                name: {'size': size, 'blocks': size, 'is_bias': True}  # Each bias param is its own block
+                for name, size in zip(self.bias_layer_names, self.bias_sizes)
+            }
+        }
+        
+    def initialize(self) -> None:
+        """Initialize parameter assignments to layer-specific blocks."""
+        assignments = torch.zeros(self.D, dtype=torch.long, device=self.device)
+        
+        # Block offset tracking
+        # First blocks are for weight layers, then individual blocks for each bias parameter
+        current_block_offset = 0
+        
+        # Assign weight layers (each gets d blocks with sharing)
+        for layer_idx, (start, end) in enumerate(self.weight_boundaries):
+            layer_size = end - start
+            layer_block_start = current_block_offset
+            layer_block_end = current_block_offset + self.k
+            
+            if self.assignment_strategy == 'random':
+                # Balanced random assignment: ensure all blocks are used
+                layer_assignments = self._balanced_random_assignment(
+                    layer_size, layer_block_start, layer_block_end
+                )
+            elif self.assignment_strategy == 'uniform':
+                # Uniform distribution across layer's blocks
+                layer_assignments = torch.arange(layer_size, device=self.device) % self.k
+                layer_assignments += layer_block_start
+            else:
+                raise ValueError(f"Unknown assignment strategy: {self.assignment_strategy}")
+            
+            assignments[start:end] = layer_assignments
+            current_block_offset += self.k
+        
+        # Assign biases: each bias parameter gets its own block (identity mapping)
+        # This means bias parameter i maps to block (weight_blocks + i)
+        bias_block_start = current_block_offset
+        
+        for bias_idx, (start, end) in enumerate(self.bias_boundaries):
+            bias_size = end - start
+            # Identity mapping: each parameter gets its own sequential block
+            bias_assignments = torch.arange(
+                bias_block_start,
+                bias_block_start + bias_size,
+                device=self.device
+            )
+            assignments[start:end] = bias_assignments
+            bias_block_start += bias_size
+        
+        # Store block offsets for weights
+        weight_block_offsets = list(range(0, self.num_weight_layers * self.k + 1, self.k))
+        bias_block_offset = self.num_weight_layers * self.k
+        
+        self.register_buffer('weight_block_offsets', 
+                            torch.tensor(weight_block_offsets, device=self.device))
+        self.register_buffer('bias_block_offset', 
+                            torch.tensor(bias_block_offset, device=self.device))
+        
+        # Store assignments as buffer (non-learnable)
+        self.register_buffer('assignments', assignments)
+    
+    def _balanced_random_assignment(self, num_params: int, block_start: int, block_end: int) -> torch.Tensor:
+        """
+        Create balanced random assignments that ensure all blocks are used.
+        
+        Strategy:
+        1. First, assign parameters in a round-robin fashion to cover all blocks
+        2. Then, randomly shuffle the assignments
+        
+        This guarantees all blocks get at least one parameter.
+        
+        Args:
+            num_params: Number of parameters to assign
+            block_start: Starting block index
+            block_end: Ending block index (exclusive)
+            
+        Returns:
+            Tensor of assignments of shape (num_params,)
+        """
+        num_blocks = block_end - block_start
+        
+        if num_params < num_blocks:
+            # If we have fewer parameters than blocks, just assign sequentially
+            assignments = torch.arange(block_start, block_start + num_params, device=self.device)
+        else:
+            # Create assignments that cycle through all blocks
+            # This ensures each block gets at least floor(num_params / num_blocks) parameters
+            assignments = torch.arange(num_params, device=self.device) % num_blocks
+            assignments += block_start
+            
+            # Shuffle to make it random while keeping all blocks used
+            perm = torch.randperm(num_params, device=self.device)
+            assignments = assignments[perm]
+        
+        return assignments
+    
+    def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """
+        Map latent vector (blocks) to full parameter space.
+        
+        Args:
+            z: Blocks vector of shape (d,) where d = (num_weight_layers * k) + total_bias_size
+               The blocks are organized as:
+               - First k blocks: weight layer 0 (shared among layer 0 parameters)
+               - Next k blocks: weight layer 1 (shared among layer 1 parameters)
+               - ...
+               - Remaining blocks: individual bias parameters (one-to-one mapping)
+            
+        Returns:
+            Full parameter tensor of shape (D,) where each position gets the value
+            from its assigned block: theta[i] = z[assignments[i]]
+        """
+        z = self._to_tensor(z)
+        
+        # Validate input dimension
+        if z.shape[0] != self.d:
+            raise ValueError(f"Expected latent vector of size {self.d}, got {z.shape[0]}")
+        
+        # Use the input z as the blocks values and look up based on assignments
+        x = z[self.assignments]
+        x = self.process(x)
+        return self.theta_base + x
+    
+    def count_block_sizes(self) -> dict:
+        """Return how many parameters are assigned to each block, organized by layer."""
+        block_usage = {}
+        
+        # Count for weight layers
+        for layer_idx, layer_name in enumerate(self.weight_layer_names):
+            start, end = self.weight_boundaries[layer_idx]
+            layer_block_start = self.weight_block_offsets[layer_idx].item()
+            layer_block_end = self.weight_block_offsets[layer_idx + 1].item()
+            num_layer_blocks = layer_block_end - layer_block_start
+            
+            layer_usage = torch.zeros(num_layer_blocks, device=self.device)
+            for local_block_idx in range(num_layer_blocks):
+                global_block_idx = layer_block_start + local_block_idx
+                layer_usage[local_block_idx] = (self.assignments[start:end] == global_block_idx).sum()
+            
+            block_usage[layer_name] = layer_usage.cpu().numpy()
+        
+        # Count for bias parameters (each should be exactly 1)
+        for bias_idx, bias_name in enumerate(self.bias_layer_names):
+            start, end = self.bias_boundaries[bias_idx]
+            bias_size = end - start
+            
+            # For biases, each parameter has its own block, so usage is always 1
+            bias_usage = torch.ones(bias_size, device=self.device)
+            block_usage[bias_name] = bias_usage.cpu().numpy()
+        
+        return block_usage
+    
+    def get_compression_ratio(self) -> float:
+        """Return the compression ratio achieved by the blocks."""
+        return self.D / self.d
+    
+    def get_layer_info(self) -> dict:
+        """Return detailed information about layer structure."""
+        info = {
+            'num_weight_layers': self.num_weight_layers,
+            'num_bias_params': self.num_bias_params,
+            'total_bias_size': self.total_bias_size,
+            'blocks_per_weight_layer_k': self.k,
+            'total_blocks': self.d,
+            'total_parameters': self.D,
+            'compression_ratio': self.get_compression_ratio(),
+            'weight_layers': [],
+            'bias_layers': []
+        }
+        
+        # Weight layers info
+        for layer_idx, layer_name in enumerate(self.weight_layer_names):
+            start, end = self.weight_boundaries[layer_idx]
+            layer_size = end - start
+            layer_block_start = self.weight_block_offsets[layer_idx].item()
+            layer_block_end = self.weight_block_offsets[layer_idx + 1].item()
+            num_layer_blocks = layer_block_end - layer_block_start
+            
+            layer_info = {
+                'name': layer_name,
+                'layer_idx': layer_idx,
+                'param_range': (start, end),
+                'param_size': layer_size,
+                'block_range': (layer_block_start, layer_block_end),
+                'num_blocks': num_layer_blocks,
+                'layer_compression_ratio': layer_size / num_layer_blocks if num_layer_blocks > 0 else 0
+            }
+            info['weight_layers'].append(layer_info)
+        
+        # Bias layers info (each parameter is its own block)
+        current_bias_block = self.bias_block_offset.item()
+        for bias_idx, bias_name in enumerate(self.bias_layer_names):
+            start, end = self.bias_boundaries[bias_idx]
+            bias_size = end - start
+            
+            bias_info = {
+                'name': bias_name,
+                'bias_idx': bias_idx,
+                'param_range': (start, end),
+                'param_size': bias_size,
+                'block_range': (current_bias_block, current_bias_block + bias_size),
+                'num_blocks': bias_size,
+                'compression_ratio': 1.0  # No compression for biases
+            }
+            info['bias_layers'].append(bias_info)
+            current_bias_block += bias_size
+        
+        return info
+    
+    def get_blocks_for_weight_layer(self, layer_idx: int, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Extract the block values for a specific weight layer from the latent vector."""
+        z = self._to_tensor(z)
+        layer_block_start = self.weight_block_offsets[layer_idx].item()
+        layer_block_end = self.weight_block_offsets[layer_idx + 1].item()
+        return z[layer_block_start:layer_block_end]
+    
+    def get_blocks_for_bias(self, bias_idx: int, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Extract the block values for a specific bias layer from the latent vector."""
+        z = self._to_tensor(z)
+        
+        # Calculate bias block range
+        bias_block_start = self.bias_block_offset.item()
+        for i in range(bias_idx):
+            bias_block_start += self.bias_sizes[i]
+        bias_block_end = bias_block_start + self.bias_sizes[bias_idx]
+        
+        return z[bias_block_start:bias_block_end]
+    
+    def get_all_bias_blocks(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Extract all bias block values from the latent vector."""
+        z = self._to_tensor(z)
+        bias_block_start = self.bias_block_offset.item()
+        return z[bias_block_start:]
+    
+    def set_blocks_for_weight_layer(self, layer_idx: int, z: torch.Tensor, 
+                                   layer_blocks: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Update the block values for a specific weight layer in the latent vector."""
+        layer_blocks = self._to_tensor(layer_blocks)
+        z_new = z.clone()
+        layer_block_start = self.weight_block_offsets[layer_idx].item()
+        layer_block_end = self.weight_block_offsets[layer_idx + 1].item()
+        z_new[layer_block_start:layer_block_end] = layer_blocks
+        return z_new
+    
+    def set_blocks_for_bias(self, bias_idx: int, z: torch.Tensor, 
+                           bias_blocks: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Update the block values for a specific bias layer in the latent vector."""
+        bias_blocks = self._to_tensor(bias_blocks)
+        z_new = z.clone()
+        
+        # Calculate bias block range
+        bias_block_start = self.bias_block_offset.item()
+        for i in range(bias_idx):
+            bias_block_start += self.bias_sizes[i]
+        bias_block_end = bias_block_start + self.bias_sizes[bias_idx]
+        
+        z_new[bias_block_start:bias_block_end] = bias_blocks
+        return z_new
+    
+    def set_all_bias_blocks(self, z: torch.Tensor, 
+                           bias_blocks: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Update all bias block values in the latent vector."""
+        bias_blocks = self._to_tensor(bias_blocks)
+        z_new = z.clone()
+        bias_block_start = self.bias_block_offset.item()
+        z_new[bias_block_start:] = bias_blocks
         return z_new
 
 
@@ -1456,7 +2292,7 @@ class LearnedBasisProjection(ParameterSharing):
         self.gradient_history.clear()
         self.basis_learned = False
         self.basis_update_count = 0
-        print("Basis reset to random initialization")
+        print("Basis reset to random initialize")
     
     def save_basis(self, filepath: str) -> None:
         """Save the learned basis to file."""
@@ -1727,6 +2563,330 @@ class ParameterizedBasisProjection(ParameterSharing):
             'basis_norm': basis_matrix.norm().item()
         }
 
+
+class LayerwiseRandomProjection(ParameterSharing):
+    """
+    Layer-wise Random Dense Projection: Each weight layer has its own random projection matrix.
+    
+    This class implements layer-wise soft parameter sharing by applying separate random projection
+    matrices to each weight layer while keeping bias parameters as individual learnable parameters.
+    
+    Structure:
+    - Weight layer 1: theta_1 = theta_base_1 + P_1 @ z_1, where P_1 is a random matrix of shape (D_1, d_1)
+    - Weight layer 2: theta_2 = theta_base_2 + P_2 @ z_2, where P_2 is a random matrix of shape (D_2, d_2)
+    - ...
+    - Weight layer L: theta_L = theta_base_L + P_L @ z_L, where P_L is a random matrix of shape (D_L, d_L)
+    - Bias parameters: theta_bias = theta_base_bias + z_bias (identity mapping, no compression)
+    
+    Total latent dimension d = sum(d_i for all weight layers) + total_bias_size
+    
+    Args:
+        model: PyTorch model
+        d: Total latent dimension or latent dimension per weight layer (see d_strategy)
+        alpha: Scaling factor for parameters
+        normalize: Whether to normalize projection matrices using QR decomposition
+        device: Device for computations
+        seed: Random seed for reproducible initialization
+        d_strategy: How to distribute latent dimensions ('uniform', 'proportional')
+                   - 'uniform': Each weight layer gets d latent dimensions
+                   - 'proportional': Distribute d proportionally to layer sizes
+    """
+    
+    def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0, 
+                 normalize: bool = False, device: str = 'cuda', seed: int = 0,
+                 d_strategy: str = 'uniform') -> None:
+        
+        # Store d_strategy before calling super().__init__
+        self.d_strategy = d_strategy
+        self.normalize = normalize
+        self._d_input = d  # Store the input d before it gets overridden
+        
+        # Initialize base class (will set self.d to the input d temporarily)
+        super().__init__(model, d, alpha, device, seed)
+        
+        # Extract layer information (separating weights and biases)
+        self._extract_layer_info()
+        
+        # Calculate actual latent dimensions per layer
+        self._calculate_latent_dimensions()
+        
+        # Initialize projection matrices
+        self.initialize()
+        
+        print(f"LayerwiseRandomProjection initialized:")
+        print(f"  - Number of weight layers (l): {self.num_weight_layers}")
+        print(f"  - Total bias parameters (b): {self.total_bias_size}")
+        print(f"  - Total latent dimension (d): {self.d} = sum(d_i) + {self.total_bias_size}")
+        print(f"  - Total parameters (D): {self.D}")
+        print(f"  - Compression ratio: {self.get_compression_ratio():.2f}")
+        print(f"  - d_strategy: {self.d_strategy}")
+        print(f"  - normalize: {self.normalize}")
+    
+    def _extract_layer_info(self) -> None:
+        """Extract layer boundaries, separating weights and biases."""
+        self.weight_boundaries = []  # List of (start_idx, end_idx) for weight layers
+        self.weight_sizes = []  # Number of parameters in each weight layer
+        self.weight_layer_names = []  # Names of weight layers
+        
+        self.bias_boundaries = []  # List of (start_idx, end_idx) for bias layers
+        self.bias_sizes = []  # Number of parameters in each bias layer
+        self.bias_layer_names = []  # Names of bias layers
+        
+        start_idx = 0
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                layer_size = param.numel()
+                end_idx = start_idx + layer_size
+                
+                is_bias = 'bias' in name
+                
+                if is_bias:
+                    self.bias_boundaries.append((start_idx, end_idx))
+                    self.bias_sizes.append(layer_size)
+                    self.bias_layer_names.append(name)
+                else:
+                    self.weight_boundaries.append((start_idx, end_idx))
+                    self.weight_sizes.append(layer_size)
+                    self.weight_layer_names.append(name)
+                
+                start_idx = end_idx
+        
+        self.num_weight_layers = len(self.weight_boundaries)
+        self.num_bias_params = len(self.bias_boundaries)
+        self.total_bias_size = sum(self.bias_sizes)
+    
+    def _calculate_latent_dimensions(self) -> None:
+        """Calculate latent dimensions for each weight layer based on strategy."""
+        if self.d_strategy == 'uniform':
+            # Each weight layer gets the same latent dimension d
+            # Total latent dimension = num_weight_layers * d + total_bias_size
+            d_per_layer = self._d_input
+            self.weight_latent_dims = [d_per_layer] * self.num_weight_layers
+            
+        elif self.d_strategy == 'proportional':
+            # Distribute d proportionally to layer sizes
+            # d_i = floor((D_i / sum(D_j)) * d_total_for_weights)
+            # where d_total_for_weights = d - total_bias_size
+            
+            total_weight_params = sum(self.weight_sizes)
+            d_total_for_weights = max(1, self._d_input - self.total_bias_size)
+            
+            self.weight_latent_dims = []
+            allocated_d = 0
+            
+            for i, layer_size in enumerate(self.weight_sizes):
+                if i == self.num_weight_layers - 1:
+                    # Last layer gets the remainder
+                    d_i = d_total_for_weights - allocated_d
+                else:
+                    # Proportional allocation
+                    proportion = layer_size / total_weight_params
+                    d_i = max(1, int(proportion * d_total_for_weights))
+                    allocated_d += d_i
+                
+                self.weight_latent_dims.append(d_i)
+        else:
+            raise ValueError(f"Unknown d_strategy: {self.d_strategy}")
+        
+        # Calculate total latent dimension
+        self.d = sum(self.weight_latent_dims) + self.total_bias_size
+        
+        # Create latent dimension boundaries for easy indexing
+        self.weight_latent_offsets = [0]
+        cumsum = 0
+        for d_i in self.weight_latent_dims:
+            cumsum += d_i
+            self.weight_latent_offsets.append(cumsum)
+        
+        self.bias_latent_offset = cumsum
+    
+    def _get_projection_buffer_name(self, layer_name: str) -> str:
+        """Get the buffer name for a layer's projection matrix."""
+        # Replace dots and other special characters with underscores
+        sanitized_name = layer_name.replace(".", "_")
+        return f'P_{sanitized_name}'
+    
+    def initialize(self) -> None:
+        """Initialize random projection matrices for each weight layer."""
+        # Create projection matrices for each weight layer
+        self.projection_matrices = nn.ModuleList()
+        
+        for layer_idx in range(self.num_weight_layers):
+            layer_size = self.weight_sizes[layer_idx]
+            d_i = self.weight_latent_dims[layer_idx]
+            layer_name = self.weight_layer_names[layer_idx]
+            
+            # Create random projection matrix: layer_size x d_i
+            P_i = torch.randn(layer_size, d_i, device=self.device)
+            
+            if self.normalize:
+                # Apply QR decomposition for orthonormal columns
+                # P_i, _ = torch.linalg.qr(P_i)
+                P_i = P_i / P_i.norm(dim=0, keepdim=True)
+                # Scale by 1/sqrt(d_i)
+                P_i = P_i / (d_i ** 0.5)
+            
+            # Store as buffer (non-learnable) using sanitized layer name
+            buffer_name = self._get_projection_buffer_name(layer_name)
+            self.register_buffer(buffer_name, P_i)
+    
+    def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """
+        Map latent vector to full parameter space using layer-wise random projections.
+        
+        Args:
+            z: Latent vector of shape (d,) where d = sum(d_i for weight layers) + total_bias_size
+               The latent vector is organized as:
+               - z[0:d_0]: latent for weight layer 0
+               - z[d_0:d_0+d_1]: latent for weight layer 1
+               - ...
+               - z[sum(d_i):]: latent for bias parameters (identity mapping)
+            
+        Returns:
+            Full parameter tensor of shape (D,)
+        """
+        z = self._to_tensor(z)
+        
+        # Validate input dimension
+        if z.shape[0] != self.d:
+            raise ValueError(f"Expected latent vector of size {self.d}, got {z.shape[0]}")
+        
+        # Initialize output tensor
+        theta = torch.zeros(self.D, device=self.device)
+        
+        # Apply layer-wise projections for weight layers
+        for layer_idx in range(self.num_weight_layers):
+            start_param, end_param = self.weight_boundaries[layer_idx]
+            start_latent = self.weight_latent_offsets[layer_idx]
+            end_latent = self.weight_latent_offsets[layer_idx + 1]
+            layer_name = self.weight_layer_names[layer_idx]
+            
+            # Extract latent for this layer
+            z_i = z[start_latent:end_latent]
+            
+            # Apply projection: theta_i = P_i @ z_i
+            buffer_name = self._get_projection_buffer_name(layer_name)
+            P_i = getattr(self, buffer_name)
+            theta_i = P_i @ z_i
+            
+            # Store in output tensor
+            theta[start_param:end_param] = theta_i
+        
+        # Handle bias parameters (identity mapping)
+        for bias_idx in range(self.num_bias_params):
+            start_param, end_param = self.bias_boundaries[bias_idx]
+            bias_size = end_param - start_param
+            
+            # Extract bias latent (one-to-one mapping)
+            bias_latent_start = self.bias_latent_offset + sum(self.bias_sizes[:bias_idx])
+            bias_latent_end = bias_latent_start + bias_size
+            
+            z_bias = z[bias_latent_start:bias_latent_end]
+            theta[start_param:end_param] = z_bias
+        
+        # Apply scaling and add to base parameters
+        theta = self.process(theta)
+        return self.theta_base + theta
+    
+    def get_compression_ratio(self) -> float:
+        """Return the compression ratio achieved by the projection."""
+        return self.D / self.d
+    
+    def get_layer_info(self) -> dict:
+        """Return detailed information about layer structure."""
+        info = {
+            'num_weight_layers': self.num_weight_layers,
+            'num_bias_params': self.num_bias_params,
+            'total_bias_size': self.total_bias_size,
+            'total_latent_dim': self.d,
+            'total_parameters': self.D,
+            'compression_ratio': self.get_compression_ratio(),
+            'weight_layers': [],
+            'bias_layers': [],
+            'd_strategy': self.d_strategy,
+            'normalize': self.normalize
+        }
+        
+        # Weight layers info
+        for layer_idx in range(self.num_weight_layers):
+            start_param, end_param = self.weight_boundaries[layer_idx]
+            start_latent = self.weight_latent_offsets[layer_idx]
+            end_latent = self.weight_latent_offsets[layer_idx + 1]
+            
+            layer_info = {
+                'name': self.weight_layer_names[layer_idx],
+                'layer_idx': layer_idx,
+                'param_range': (start_param, end_param),
+                'param_size': self.weight_sizes[layer_idx],
+                'latent_range': (start_latent, end_latent),
+                'latent_dim': self.weight_latent_dims[layer_idx],
+                'layer_compression_ratio': self.weight_sizes[layer_idx] / self.weight_latent_dims[layer_idx]
+            }
+            info['weight_layers'].append(layer_info)
+        
+        # Bias layers info (each parameter is its own latent dimension)
+        for bias_idx in range(self.num_bias_params):
+            start_param, end_param = self.bias_boundaries[bias_idx]
+            bias_size = self.bias_sizes[bias_idx]
+            bias_latent_start = self.bias_latent_offset + sum(self.bias_sizes[:bias_idx])
+            bias_latent_end = bias_latent_start + bias_size
+            
+            bias_info = {
+                'name': self.bias_layer_names[bias_idx],
+                'bias_idx': bias_idx,
+                'param_range': (start_param, end_param),
+                'param_size': bias_size,
+                'latent_range': (bias_latent_start, bias_latent_end),
+                'latent_dim': bias_size,
+                'compression_ratio': 1.0  # No compression for biases
+            }
+            info['bias_layers'].append(bias_info)
+        
+        return info
+    
+    def get_projection_matrix(self, layer_idx: int) -> torch.Tensor:
+        """Get the projection matrix for a specific weight layer."""
+        if layer_idx >= self.num_weight_layers:
+            raise ValueError(f"Invalid layer_idx: {layer_idx}. Only {self.num_weight_layers} weight layers exist.")
+        layer_name = self.weight_layer_names[layer_idx]
+        buffer_name = self._get_projection_buffer_name(layer_name)
+        return getattr(self, buffer_name)
+    
+    def get_latent_for_weight_layer(self, layer_idx: int, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Extract the latent vector for a specific weight layer from the full latent vector."""
+        z = self._to_tensor(z)
+        start_latent = self.weight_latent_offsets[layer_idx]
+        end_latent = self.weight_latent_offsets[layer_idx + 1]
+        return z[start_latent:end_latent]
+    
+    def get_latent_for_bias(self, bias_idx: int, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Extract the latent vector for a specific bias layer from the full latent vector."""
+        z = self._to_tensor(z)
+        bias_latent_start = self.bias_latent_offset + sum(self.bias_sizes[:bias_idx])
+        bias_latent_end = bias_latent_start + self.bias_sizes[bias_idx]
+        return z[bias_latent_start:bias_latent_end]
+    
+    def set_latent_for_weight_layer(self, layer_idx: int, z: torch.Tensor, 
+                                    layer_latent: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Update the latent values for a specific weight layer in the full latent vector."""
+        layer_latent = self._to_tensor(layer_latent)
+        z_new = z.clone()
+        start_latent = self.weight_latent_offsets[layer_idx]
+        end_latent = self.weight_latent_offsets[layer_idx + 1]
+        z_new[start_latent:end_latent] = layer_latent
+        return z_new
+    
+    def set_latent_for_bias(self, bias_idx: int, z: torch.Tensor, 
+                           bias_latent: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """Update the latent values for a specific bias layer in the full latent vector."""
+        bias_latent = self._to_tensor(bias_latent)
+        z_new = z.clone()
+        bias_latent_start = self.bias_latent_offset + sum(self.bias_sizes[:bias_idx])
+        bias_latent_end = bias_latent_start + self.bias_sizes[bias_idx]
+        z_new[bias_latent_start:bias_latent_end] = bias_latent
+        return z_new
+
+
 def create_weight_sharing(model, args, optimizer_type=None):
     """
     Create a weight sharing instance based on the provided arguments.
@@ -1757,6 +2917,20 @@ def create_weight_sharing(model, args, optimizer_type=None):
             seed=seed, 
             device=args.ws_device
         )
+    elif param_sharing_type == 'lwb-v2':
+        ws = LayerwiseHardWeightSharingV2(
+            model=model, 
+            d=args.d, 
+            seed=seed, 
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'lwb-v3':
+        ws = LayerwiseHardWeightSharingV3(
+            model=model, 
+            d=args.d, 
+            seed=seed, 
+            device=args.ws_device
+        )
     elif param_sharing_type == 'randproj':
         normalize = args.normalize_projection
         ws = RandomProjectionSoftSharing(
@@ -1764,6 +2938,18 @@ def create_weight_sharing(model, args, optimizer_type=None):
             d=args.d, 
             alpha=args.alpha, 
             normalize=normalize, 
+            seed=seed,
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'lwdp': # layer-wise random projection with proportional distribution
+        normalize = getattr(args, 'normalize_projection', False)
+        d_strategy = getattr(args, 'd_strategy', 'uniform')
+        ws = LayerwiseRandomProjection(
+            model=model, 
+            d=args.d, 
+            alpha=args.alpha, 
+            normalize=normalize,
+            d_strategy=d_strategy,
             seed=seed,
             device=args.ws_device
         )
