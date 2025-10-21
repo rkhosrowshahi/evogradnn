@@ -6,7 +6,7 @@ commands:
     command: >-
       python evo_trainer.py
       --dataset cifar10
-      --sampler balanced
+      --sampler random
       --arch lenet
       --optimizer CMA_ES
       --d 128
@@ -23,7 +23,7 @@ commands:
     command: >-
       python evo_trainer.py
       --dataset cifar10
-      --sampler balanced
+      --sampler random
       --arch lenet
       --optimizer CMA_ES
       --d 128
@@ -40,7 +40,7 @@ commands:
     command: >-
       python evo_trainer.py
       --dataset cifar10
-      --sampler balanced
+      --sampler random
       --arch lenet
       --optimizer CMA_ES
       --d 128
