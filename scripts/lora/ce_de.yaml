@@ -1,0 +1,117 @@
+description: "LoRA Parameter Sharing with Differential Evolution"
+default_timeout: null
+stop_on_error: true
+commands:
+  - name: "Run 1"
+    command: >-
+      python evo_trainer.py
+      --dataset cifar10
+      --sampler random
+      --arch lenet
+      --d 1
+      --optimizer DE
+      --pop_init uniform
+      --pop_init_bound 0.1
+      --de_mr 0.5
+      --de_cr 0.9
+      --popsize 64
+      --epochs 200
+      --bus none
+      --criterion ce
+      --ws lora
+      --wd 5e-4
+
+  - name: "Run 2"
+    command: >-
+      python evo_trainer.py
+      --dataset cifar10
+      --sampler random
+      --arch lenet
+      --d 2
+      --optimizer DE
+      --pop_init uniform
+      --pop_init_bound 0.1
+      --de_mr 0.5
+      --de_cr 0.9
+      --popsize 64
+      --epochs 200
+      --bus none
+      --criterion ce
+      --ws lora
+      --wd 5e-4
+
+  - name: "Run 3"
+    command: >-
+      python evo_trainer.py
+      --dataset cifar10
+      --sampler random
+      --arch lenet
+      --d 1
+      --optimizer DE
+      --pop_init uniform
+      --pop_init_bound 0.1
+      --de_mr 0.5
+      --de_cr 0.9
+      --popsize 64
+      --epochs 200
+      --bus none
+      --criterion ce
+      --ws lora
+      --wd 5e-4
+
+  - name: "Run 4"
+    command: >-
+      python evo_trainer.py
+      --dataset cifar10
+      --sampler random
+      --arch lenet
+      --d 2
+      --optimizer DE
+      --pop_init uniform
+      --pop_init_bound 0.1
+      --de_mr 0.5
+      --de_cr 0.9
+      --popsize 64
+      --epochs 200
+      --bus none
+      --criterion ce
+      --ws lora
+      --wd 5e-4
+
+  - name: "Run 5"
+    command: >-
+      python evo_trainer.py
+      --dataset cifar10
+      --sampler random
+      --arch lenet
+      --d 1
+      --optimizer DE
+      --pop_init uniform
+      --pop_init_bound 0.1
+      --de_mr 0.5
+      --de_cr 0.9
+      --popsize 64
+      --epochs 200
+      --bus none
+      --criterion ce
+      --ws lora
+      --wd 5e-4
+
+  - name: "Run 6"
+    command: >-
+      python evo_trainer.py
+      --dataset cifar10
+      --sampler random
+      --arch lenet
+      --d 2
+      --optimizer DE
+      --pop_init uniform
+      --pop_init_bound 0.1
+      --de_mr 0.5
+      --de_cr 0.9
+      --popsize 64
+      --epochs 200
+      --bus none
+      --criterion ce
+      --ws lora
+      --wd 5e-4

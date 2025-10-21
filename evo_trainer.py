@@ -422,9 +422,10 @@ def main(args):
                     raise ValueError(f"Invalid argument: {argmin}")
                 print(f"Best solution eval top1: {theta_best_test_top1:.6f}, mean solution eval top1: {theta_mean_test_top1:.6f}, mean topk=5 solution eval top1: {theta_mean_topk_test_top1:.6f}")
             else:
-                population = optimizer.get_population(state=optimizer_state)
-                topk_indices = np.argsort(optimizer_state.fitness)[:5]
-                zt = population[topk_indices].mean(axis=0)
+                # population = optimizer.get_population(state=optimizer_state)
+                # topk_indices = np.argsort(optimizer_state.fitness)[:5]
+                # zt = population[topk_indices].mean(axis=0)
+                zt = optimizer.get_best_solution(state=optimizer_state)
         elif optimizer_type == 'ES':  # ES strategy
             zt = optimizer.get_mean(state=optimizer_state)
             if args.optimizer.lower() == 'sv_cma_es' or args.optimizer.lower() == 'sv_open_es':

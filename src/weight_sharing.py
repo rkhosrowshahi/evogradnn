@@ -3130,6 +3130,233 @@ class GlobalRandomProjection(ParameterSharing):
         return z_new
 
 
+class LoRAParameterSharing(ParameterSharing):
+    """
+    Low-Rank Adaptation (LoRA) parameter sharing.
+
+    This class implements parameter sharing using LoRA (Low-Rank Adaptation) where each
+    weight layer is adapted using low-rank matrices A and B, while biases are kept as
+    separate parameters.
+
+    For each weight layer W (shape: out_features x in_features):
+    - A: matrix of shape (rank x in_features)
+    - B: matrix of shape (out_features x rank)
+    - Adaptation: ΔW = B @ A
+    - Final weight: W = W_base + ΔW
+
+    The latent vector z consists of:
+    - LoRA parameters for all weight layers (flattened A and B matrices)
+    - Bias parameters for all bias layers
+
+    Args:
+        model: PyTorch model
+        d: LoRA rank for weight adaptation
+        alpha: Scaling factor for parameters
+        device: Device for computations
+        seed: Random seed for initialization
+    """
+
+    def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0,
+                 device: str = 'cuda', seed: int = 0) -> None:
+
+        super().__init__(model, d, alpha, device, seed)
+
+        self.rank = d  # LoRA rank
+        self._extract_layer_info()
+        self.initialize()
+
+        print(f"LoRA Parameter Sharing initialized:")
+        print(f"  - LoRA rank: {self.rank}")
+        print(f"  - Number of weight layers: {self.num_weight_layers}")
+        print(f"  - Number of bias layers: {self.num_bias_params}")
+        print(f"  - Total latent dimension (d): {self.d}")
+        print(f"  - Total parameters (D): {self.D}")
+        print(f"  - Compression ratio: {self.get_compression_ratio():.2f}")
+
+    def _extract_layer_info(self) -> None:
+        """Extract layer boundaries, separating weights and biases."""
+        self.weight_boundaries = []  # List of (start_idx, end_idx) for weight layers
+        self.weight_sizes = []  # Number of parameters in each weight layer
+        self.weight_layer_names = []  # Names of weight layers
+        self.weight_shapes = []  # Shapes of weight matrices
+
+        self.bias_boundaries = []  # List of (start_idx, end_idx) for bias layers
+        self.bias_sizes = []  # Number of parameters in each bias layer
+        self.bias_layer_names = []  # Names of bias layers
+
+        start_idx = 0
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                layer_size = param.numel()
+                end_idx = start_idx + layer_size
+
+                is_bias = 'bias' in name
+
+                if is_bias:
+                    self.bias_boundaries.append((start_idx, end_idx))
+                    self.bias_sizes.append(layer_size)
+                    self.bias_layer_names.append(name)
+                else:
+                    self.weight_boundaries.append((start_idx, end_idx))
+                    self.weight_sizes.append(layer_size)
+                    self.weight_layer_names.append(name)
+                    self.weight_shapes.append(param.shape)
+
+                start_idx = end_idx
+
+        self.num_weight_layers = len(self.weight_boundaries)
+        self.num_bias_params = len(self.bias_boundaries)
+        self.total_bias_size = sum(self.bias_sizes)
+
+        # Calculate LoRA parameter sizes for each weight layer
+        self.lora_param_sizes = []
+        self.lora_param_offsets = [0]
+
+        for shape in self.weight_shapes:
+            if len(shape) == 2:  # Linear layer: (out_features, in_features)
+                out_features, in_features = shape
+                # LoRA parameters: A (rank x in_features) + B (out_features x rank)
+                lora_size = self.rank * in_features + out_features * self.rank
+            elif len(shape) == 4:  # Conv layer: (out_channels, in_channels, kernel_h, kernel_w)
+                out_channels, in_channels, kh, kw = shape
+                # For conv layers, treat as linear: in_features = in_channels * kh * kw
+                in_features = in_channels * kh * kw
+                lora_size = self.rank * in_features + out_channels * self.rank
+            else:
+                # Fallback: treat as 1D parameter vector
+                lora_size = min(shape.numel(), self.rank * 2)  # Conservative estimate
+
+            self.lora_param_sizes.append(lora_size)
+            self.lora_param_offsets.append(self.lora_param_offsets[-1] + lora_size)
+
+        # Total latent dimension = sum of LoRA params for weights + bias params
+        self.weight_latent_dim = sum(self.lora_param_sizes)
+        self.d = self.weight_latent_dim + self.total_bias_size
+
+    def initialize(self) -> None:
+        """Initialize LoRA parameters."""
+        # Store base parameters (theta_base is already set in parent class)
+        pass
+
+    def get_compression_ratio(self) -> float:
+        """Calculate compression ratio (D/d)."""
+        return self.D / self.d
+
+    def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """
+        Map latent vector to full parameter space using LoRA.
+
+        Args:
+            z: Latent vector of shape (d,) containing LoRA params + bias params
+
+        Returns:
+            Full parameter tensor of shape (D,)
+        """
+        z = self._to_tensor(z)
+
+        # Split latent vector into weight LoRA params and bias params
+        weight_latent = z[:self.weight_latent_dim]
+        bias_latent = z[self.weight_latent_dim:]
+
+        # Reconstruct full parameters
+        reconstructed_params = torch.zeros_like(self.theta_base)
+
+        # Process weight layers with LoRA
+        weight_latent_idx = 0
+        for layer_idx, (start, end) in enumerate(self.weight_boundaries):
+            shape = self.weight_shapes[layer_idx]
+            base_weight = self.theta_base[start:end].view(shape)
+
+            # Extract LoRA parameters for this layer
+            lora_size = self.lora_param_sizes[layer_idx]
+            layer_lora_params = weight_latent[weight_latent_idx:weight_latent_idx + lora_size]
+            weight_latent_idx += lora_size
+
+            # Reconstruct weight with LoRA adaptation
+            if len(shape) == 2:  # Linear layer
+                out_features, in_features = shape
+                # A: (rank, in_features), B: (out_features, rank)
+                a_size = self.rank * in_features
+                a_flat = layer_lora_params[:a_size]
+                b_flat = layer_lora_params[a_size:]
+
+                A = a_flat.view(self.rank, in_features)
+                B = b_flat.view(out_features, self.rank)
+
+                # ΔW = B @ A
+                delta_W = B @ A
+
+            elif len(shape) == 4:  # Conv layer
+                out_channels, in_channels, kh, kw = shape
+                in_features = in_channels * kh * kw
+
+                # A: (rank, in_features), B: (out_channels, rank)
+                a_size = self.rank * in_features
+                a_flat = layer_lora_params[:a_size]
+                b_flat = layer_lora_params[a_size:]
+
+                A = a_flat.view(self.rank, in_features)
+                B = b_flat.view(out_channels, self.rank)
+
+                # ΔW = B @ A, then reshape back to conv shape
+                delta_W = (B @ A).view(out_channels, in_channels, kh, kw)
+            else:
+                # Fallback: no LoRA adaptation for unsupported shapes
+                delta_W = torch.zeros_like(base_weight)
+
+            # Apply LoRA adaptation: W = W_base + ΔW
+            adapted_weight = base_weight + self.alpha * delta_W
+            reconstructed_params[start:end] = adapted_weight.view(-1)
+
+        # Process bias layers (direct mapping)
+        bias_latent_idx = 0
+        for bias_idx, (start, end) in enumerate(self.bias_boundaries):
+            bias_size = self.bias_sizes[bias_idx]
+            bias_params = bias_latent[bias_latent_idx:bias_latent_idx + bias_size]
+            reconstructed_params[start:end] = self.alpha * bias_params
+            bias_latent_idx += bias_size
+
+        return reconstructed_params
+
+    def get_layer_info(self) -> dict:
+        """Get information about layer organization."""
+        info = {
+            'num_weight_layers': self.num_weight_layers,
+            'num_bias_layers': self.num_bias_params,
+            'lora_rank': self.rank,
+            'weight_latent_dim': self.weight_latent_dim,
+            'bias_latent_dim': self.total_bias_size,
+            'total_latent_dim': self.d,
+            'compression_ratio': self.get_compression_ratio(),
+            'weight_layers': [],
+            'bias_layers': []
+        }
+
+        # Weight layer info
+        for layer_idx, layer_name in enumerate(self.weight_layer_names):
+            start, end = self.weight_boundaries[layer_idx]
+            layer_info = {
+                'name': layer_name,
+                'shape': self.weight_shapes[layer_idx],
+                'size': self.weight_sizes[layer_idx],
+                'lora_params': self.lora_param_sizes[layer_idx],
+                'param_range': (start, end)
+            }
+            info['weight_layers'].append(layer_info)
+
+        # Bias layer info
+        for bias_idx, bias_name in enumerate(self.bias_layer_names):
+            start, end = self.bias_boundaries[bias_idx]
+            bias_info = {
+                'name': bias_name,
+                'size': self.bias_sizes[bias_idx],
+                'param_range': (start, end)
+            }
+            info['bias_layers'].append(bias_info)
+
+        return info
+
+
 def create_weight_sharing(model, args, optimizer_type=None):
     """
     Create a weight sharing instance based on the provided arguments.
@@ -3237,9 +3464,17 @@ def create_weight_sharing(model, args, optimizer_type=None):
         )
     elif param_sharing_type == 'rff':
         ws = RandomFourierFeaturesSoftSharing(
-            model=model, 
-            d=args.d, 
-            alpha=args.alpha, 
+            model=model,
+            d=args.d,
+            alpha=args.alpha,
+            seed=seed,
+            device=args.ws_device
+        )
+    elif param_sharing_type == 'lora':
+        ws = LoRAParameterSharing(
+            model=model,
+            d=args.d,
+            alpha=args.alpha,
             seed=seed,
             device=args.ws_device
         )
