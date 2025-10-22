@@ -30,7 +30,7 @@ class ParameterSharing(nn.Module):
         - Processed parameters: torch.Tensor of shape (D,) ready for loading into model
     """
 
-    def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0, device: str = 'cuda', seed: int = 0) -> None:
+    def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0, device: str = 'cuda', seed: int = 0, train_biases: bool = True) -> None:
         """
         Initialize parameter sharing.
 
@@ -40,21 +40,118 @@ class ParameterSharing(nn.Module):
             alpha: Scaling factor for parameters.
             device: Device for PyTorch computations.
             seed: Random seed for reproducible initialize.
+            train_biases: Whether to train bias parameters. If False, only weight parameters are trained.
         """
         super().__init__()
         self.device = device
         self.model = model
         self.seed = seed
+        self.train_biases = train_biases
+        
         theta_base = params_to_vector(self.model.parameters())
         self.register_buffer('theta_base', theta_base)
-        self.D = len(theta_base)
+        self.D = len(theta_base)  # Full parameter count
+        
+        # Compute trainable parameter indices (excluding bias, batchnorm, etc. if train_biases=False)
+        trainable_indices = self._compute_trainable_indices()
+        self.register_buffer('trainable_indices', trainable_indices)
+        self.N = len(trainable_indices)  # Number of trainable parameters
+        
         self.d = d
         self.alpha = alpha
 
-        assignments = torch.from_numpy(np.random.randint(0, self.d, (self.D,)))
+        # Assignments now map to trainable parameter space (size N if train_biases=False, else D)
+        effective_size = self.N if not self.train_biases else self.D
+        assignments = torch.from_numpy(np.random.randint(0, self.d, (effective_size,)))
         self.register_buffer('assignments', assignments)
 
         self.x0 = self.init_x0()
+
+    def _compute_trainable_indices(self) -> torch.Tensor:
+        """
+        Compute indices of trainable parameters based on train_biases flag.
+        
+        If train_biases=True, all parameters are trainable (indices = 0 to D-1).
+        If train_biases=False, only weight parameters are trainable (excluding bias, batchnorm, layernorm, dropout).
+        
+        Returns:
+            Tensor of trainable parameter indices
+        """
+        if self.train_biases:
+            # All parameters are trainable
+            return torch.arange(self.D, device=self.device)
+        
+        # Identify which parameters are weights (not bias, batchnorm, layernorm, dropout)
+        trainable_mask = []
+        offset = 0
+        
+        for name, param in self.model.named_parameters():
+            param_size = param.numel()
+            
+            # Check if this is a trainable weight parameter
+            is_trainable = True
+            
+            # Exclude bias parameters
+            if 'bias' in name:
+                is_trainable = False
+            
+            # Exclude batch normalization parameters (running_mean, running_var, weight, bias)
+            if any(bn_layer in name for bn_layer in ['bn', 'batch_norm', 'batchnorm', 'BatchNorm']):
+                is_trainable = False
+            
+            # Exclude layer normalization parameters
+            if any(ln_layer in name for ln_layer in ['ln', 'layer_norm', 'layernorm', 'LayerNorm']):
+                is_trainable = False
+            
+            # Exclude group normalization parameters  
+            if any(gn_layer in name for gn_layer in ['gn', 'group_norm', 'groupnorm', 'GroupNorm']):
+                is_trainable = False
+            
+            # Exclude instance normalization parameters
+            if any(in_layer in name for in_layer in ['instance_norm', 'instancenorm', 'InstanceNorm']):
+                is_trainable = False
+            
+            # Note: Dropout layers don't have parameters, so we don't need to check for them
+            
+            if is_trainable:
+                # Add indices for this parameter
+                trainable_mask.extend(range(offset, offset + param_size))
+            
+            offset += param_size
+        
+        return torch.tensor(trainable_mask, dtype=torch.long, device=self.device)
+    
+    def _extract_weight_bias_info(self) -> None:
+        """
+        Extract weight and bias parameter boundaries for 1:1 bias mapping.
+        This is used when train_biases=True to apply identity mapping to biases.
+        """
+        self.weight_indices = []
+        self.bias_indices = []
+        
+        offset = 0
+        for name, param in self.model.named_parameters():
+            param_size = param.numel()
+            indices = list(range(offset, offset + param_size))
+            
+            is_bias = 'bias' in name
+            # Also treat normalization layer parameters as "bias-like" (no projection)
+            is_norm = any(norm in name for norm in ['bn', 'batch_norm', 'batchnorm', 'BatchNorm',
+                                                      'ln', 'layer_norm', 'layernorm', 'LayerNorm',
+                                                      'gn', 'group_norm', 'groupnorm', 'GroupNorm',
+                                                      'instance_norm', 'instancenorm', 'InstanceNorm'])
+            
+            if is_bias or is_norm:
+                self.bias_indices.extend(indices)
+            else:
+                self.weight_indices.extend(indices)
+            
+            offset += param_size
+        
+        self.weight_indices = torch.tensor(self.weight_indices, dtype=torch.long, device=self.device)
+        self.bias_indices = torch.tensor(self.bias_indices, dtype=torch.long, device=self.device)
+        self.num_weights = len(self.weight_indices)
+        self.num_biases = len(self.bias_indices)
 
     def init_x0(self) -> np.ndarray:
         """Initialize the starting point in latent space.
@@ -113,18 +210,44 @@ class ParameterSharing(nn.Module):
             x = torch.from_numpy(x).float()
         return x.to(self.device)
     
+    def _map_to_full_space(self, x_trainable: torch.Tensor) -> torch.Tensor:
+        """
+        Map trainable parameter vector to full parameter space.
+        
+        If train_biases=True, x_trainable is already of size D, so return as is.
+        If train_biases=False, x_trainable is of size N, and we need to map it to size D
+        by placing values at trainable_indices and zeros elsewhere.
+        
+        Args:
+            x_trainable: Tensor of shape (N,) if train_biases=False, else (D,)
+            
+        Returns:
+            Tensor of shape (D,) representing full parameter space
+        """
+        if self.train_biases:
+            return x_trainable
+        
+        # Create zero vector of size D
+        x_full = torch.zeros(self.D, device=self.device, dtype=x_trainable.dtype)
+        # Place trainable values at their indices
+        x_full[self.trainable_indices] = x_trainable
+        return x_full
+    
     def process(self, x: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
         """
         Process expanded parameters with scaling and optional normalization.
         
         Args:
-            x: Expanded parameter vector of shape (D,)
+            x: Expanded parameter vector of shape (N,) if train_biases=False, else (D,)
             
         Returns:
-            Processed parameter tensor of shape (D,)
+            Processed parameter tensor of shape (D,) mapped to full space and added to theta_base
         """
         x = self._to_tensor(x)
-        return self.alpha * x
+        # Map to full parameter space (if train_biases=False, this maps N -> D)
+        x_full = self._map_to_full_space(self.alpha * x)
+        # Add to base parameters
+        return self.theta_base + x_full
     
     def load_to_model(self, theta: Union[np.ndarray, torch.Tensor]) -> None:
         """
@@ -143,26 +266,39 @@ class RandomProjectionSoftSharing(ParameterSharing):
     
     This class implements soft parameter sharing by projecting from a low-dimensional
     latent space to the full parameter space using a random projection matrix P.
-    The mapping is: theta = theta_base + P @ z, where P is a random matrix of shape (D, d).
     
-    The projection matrix can optionally be normalized to have unit column norms
-    and scaled by 1/sqrt(d) to maintain reasonable parameter magnitudes.
+    When train_biases=True:
+    - Weight parameters: theta_weights = theta_base_weights + P @ z_weights
+    - Bias parameters: theta_bias = theta_base_bias + z_bias (1:1 identity mapping)
+    - Total latent dimension = d + num_bias_params
+    
+    When train_biases=False:
+    - Only weight parameters are trainable via projection
+    - Bias parameters remain at theta_base values
+    - Total latent dimension = d
     
     Input types:
         - Model: torch.nn.Module
-        - d: int (number of shared parameters)
+        - d: int (latent dimension for weight parameters)
         - Scaling factor alpha: float
         - Normalization: bool (whether to normalize the projection matrix)  
-        
     
     Output types:
         - Full parameter vector: torch.Tensor of shape (D,) where D is the
           total number of model parameters
     """
     
-    def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0, normalize: bool = False, device: str = 'cuda', seed: int = 0) -> None:
-        super().__init__(model, d, alpha, device, seed)
+    def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0, normalize: bool = False, device: str = 'cuda', seed: int = 0, train_biases: bool = True) -> None:
+        self._d_input = d  # Store input d before parent class modifies it
+        super().__init__(model, d, alpha, device, seed, train_biases)
         self.normalize = normalize
+        
+        # Extract weight/bias info if train_biases=True
+        if self.train_biases:
+            self._extract_weight_bias_info()
+            # Update latent dimension: d for weights + num_biases for 1:1 mapping
+            self.d = self._d_input + self.num_biases
+        
         self.initialize()
 
     def initialize(self) -> torch.Tensor:
@@ -170,20 +306,20 @@ class RandomProjectionSoftSharing(ParameterSharing):
         Initialize the random projection matrix with seed.
         
         Returns:
-            Random projection matrix P of shape (D, d)
+            Random projection matrix P of shape (num_weights, d_weights)
         """
-        P = torch.randn(self.D, self.d, device=self.device)
+        # Projection matrix is always for weights only
+        if self.train_biases:
+            proj_size = self.num_weights
+            latent_dim = self._d_input
+        else:
+            proj_size = self.N  # Only trainable weights
+            latent_dim = self.d
+            
+        P = torch.randn(proj_size, latent_dim, device=self.device)
         if self.normalize:
-            # P = P / P.norm(dim=0, keepdim=True)
             P, _ = torch.linalg.qr(P)
-            # P = Q.T
-            # P = Q[:, :self.d].T
-
-            # Check for orthonormality: P @ P.T should be the identity matrix
-            # print(P.shape, P.T.shape)
-            # print(torch.allclose(P @ P.T, torch.eye(self.d, device=self.device)))
-            # print(P.T @ P)
-            P = P / (self.d ** 0.5)
+            P = P / (latent_dim ** 0.5)
         self.register_buffer('P', P)
         return P
 
@@ -193,14 +329,34 @@ class RandomProjectionSoftSharing(ParameterSharing):
         
         Args:
             z: Latent vector of shape (d,)
+               If train_biases=True: z = [z_weights (d_input), z_biases (num_biases)]
+               If train_biases=False: z = [z_weights (d)]
             
         Returns:
-            Full parameter tensor of shape (D,) computed as theta_base + P @ z
+            Full parameter tensor of shape (D,) computed as theta_base + delta
         """
         z = self._to_tensor(z)
-        x = self.P @ z
-        x = self.process(x)
-        return self.theta_base + x
+        
+        if self.train_biases:
+            # Split z into weight and bias components
+            z_weights = z[:self._d_input]
+            z_biases = z[self._d_input:]
+            
+            # Project weights
+            delta_weights = self.P @ z_weights  # Shape: (num_weights,)
+            
+            # Create full delta vector
+            delta = torch.zeros(self.D, device=self.device)
+            delta[self.weight_indices] = delta_weights
+            delta[self.bias_indices] = z_biases
+            
+            # Apply scaling and add to base
+            return self.theta_base + self.alpha * delta
+        else:
+            # Only project trainable weights
+            x = self.P @ z  # Shape: (N,)
+            # process() will map x to full space and add to theta_base
+            return self.process(x)
 
     def latent_rotate(self, R: torch.Tensor) -> None:
         """Apply an orthogonal rotation in latent space: P <- P @ R.
@@ -241,19 +397,28 @@ class RandomFourierFeaturesSoftSharing(ParameterSharing):
     """
     
     def __init__(self, model: torch.nn.Module, d: int, 
-                 sigma: float = 1.0, alpha: float = 1.0, device: str = 'cuda', seed: int = 0) -> None:
+                 sigma: float = 1.0, alpha: float = 1.0, device: str = 'cuda', seed: int = 0, train_biases: bool = True) -> None:
         """
         Initialize Random Fourier Features soft sharing.
         
         Args:
             model: PyTorch model (e.g., ResNet-18).
-            d: Number of shared parameters (latent dimension).
+            d: Latent dimension for weight parameters.
             sigma: Standard deviation for omega sampling (1/sigma^2 is the variance).
             device: Device for PyTorch computations.
             seed: Random seed for reproducible initialize.
+            train_biases: Whether to train bias parameters (1:1 mapping if True, frozen if False).
         """
-        super().__init__(model, d, alpha, device, seed)
+        self._d_input = d
+        super().__init__(model, d, alpha, device, seed, train_biases)
         self.sigma = sigma
+        
+        # Extract weight/bias info if train_biases=True
+        if self.train_biases:
+            self._extract_weight_bias_info()
+            # Update latent dimension: d for weights + num_biases for 1:1 mapping
+            self.d = self._d_input + self.num_biases
+        
         self.initialize()
 
     def initialize(self) -> None:
@@ -262,13 +427,16 @@ class RandomFourierFeaturesSoftSharing(ParameterSharing):
         
         Draws omega from N(0, sigma^{-2} I) and b from uniform [0, 2π].
         """
+        # RFF is always for weights only
+        proj_size = self.num_weights if self.train_biases else self.N
+        latent_dim = self._d_input if self.train_biases else self.d
         
         # Draw omegas from N(0, sigma^{-2} I)
-        omega = torch.randn(self.D, self.d, device=self.device) / self.sigma
+        omega = torch.randn(proj_size, latent_dim, device=self.device) / self.sigma
         self.register_buffer('omega', omega)
         
         # Draw biases from uniform [0, 2π]
-        b = torch.rand(self.D, device=self.device) * 2 * np.pi
+        b = torch.rand(proj_size, device=self.device) * 2 * np.pi
         self.register_buffer('b', b)
 
     def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
@@ -277,16 +445,38 @@ class RandomFourierFeaturesSoftSharing(ParameterSharing):
         
         Args:
             z: Latent vector of shape (d,)
+               If train_biases=True: z = [z_weights (d_input), z_biases (num_biases)]
+               If train_biases=False: z = [z_weights (d)]
             
         Returns:
-            Full parameter tensor of shape (D,) computed as:
-            theta_base + sqrt(2/D) * cos(omega @ z + b)
+            Full parameter tensor of shape (D,)
         """
         z = self._to_tensor(z)
-        linear_combination = torch.matmul(self.omega, z) + self.b
-        x = self.alpha * np.sqrt(2.0 / self.D) * torch.cos(linear_combination)
-        x = self.process(x)
-        return self.theta_base + x
+        
+        if self.train_biases:
+            # Split z into weight and bias components
+            z_weights = z[:self._d_input]
+            z_biases = z[self._d_input:]
+            
+            # Apply RFF to weights
+            proj_size = self.num_weights
+            linear_combination = torch.matmul(self.omega, z_weights) + self.b
+            delta_weights = np.sqrt(2.0 / proj_size) * torch.cos(linear_combination)
+            
+            # Create full delta vector
+            delta = torch.zeros(self.D, device=self.device)
+            delta[self.weight_indices] = delta_weights
+            delta[self.bias_indices] = z_biases
+            
+            # Apply scaling and add to base
+            return self.theta_base + self.alpha * delta
+        else:
+            # Apply RFF to trainable weights only
+            proj_size = self.N
+            linear_combination = torch.matmul(self.omega, z) + self.b
+            x = np.sqrt(2.0 / proj_size) * torch.cos(linear_combination)
+            # process() will apply alpha, map to full space, and add to theta_base
+            return self.process(x)
 
 
 class FastfoodProjection(ParameterSharing):
@@ -323,18 +513,27 @@ class FastfoodProjection(ParameterSharing):
     """
     
     def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0, 
-                 device: str = 'cuda', seed: int = 0) -> None:
+                 device: str = 'cuda', seed: int = 0, train_biases: bool = True) -> None:
         """
         Initialize Fastfood projection.
         
         Args:
             model: PyTorch model
-            d: Latent dimension (number of parameters to optimize)
+            d: Latent dimension for weight parameters
             alpha: Scaling factor for the projection
             device: Device for computations ('cuda' or 'cpu')
             seed: Random seed for reproducibility
+            train_biases: Whether to train bias parameters (1:1 mapping if True, frozen if False)
         """
-        super().__init__(model, d, alpha, device, seed)
+        self._d_input = d
+        super().__init__(model, d, alpha, device, seed, train_biases)
+        
+        # Extract weight/bias info if train_biases=True
+        if self.train_biases:
+            self._extract_weight_bias_info()
+            # Update latent dimension: d for weights + num_biases for 1:1 mapping
+            self.d = self._d_input + self.num_biases
+        
         self.initialize()
     
     def initialize(self) -> None:
@@ -342,17 +541,26 @@ class FastfoodProjection(ParameterSharing):
         Initialize Fastfood transform parameters.
         
         Creates the fixed random matrices B, G, and permutation Π.
-        Pads D to the next power of 2 if needed for FWHT.
+        Pads weight parameter count to the next power of 2 if needed for FWHT.
         """
+        # Fastfood transform is always for weights only
+        if self.train_biases:
+            proj_size = self.num_weights
+        else:
+            proj_size = self.N  # Only trainable weights
+        
         # Store original dimension
-        self.D_original = self.D
+        self.D_original = proj_size
         
-        # Pad D to next power of 2 for Fast Walsh-Hadamard Transform
-        self.D_padded = 2 ** int(np.ceil(np.log2(self.D)))
+        # Pad to next power of 2 for Fast Walsh-Hadamard Transform
+        self.D_padded = 2 ** int(np.ceil(np.log2(proj_size)))
         
-        # Number of blocks needed to cover d dimensions
-        # Each block has D_padded dimensions, so we need ceil(d / D_padded) blocks
-        self.n_blocks = int(np.ceil(self.d / self.D_padded))
+        # Latent dimension for weights only
+        self.d_weights = self._d_input if self.train_biases else self.d
+        
+        # Number of blocks needed to cover d_weights dimensions
+        # Each block has D_padded dimensions, so we need ceil(d_weights / D_padded) blocks
+        self.n_blocks = int(np.ceil(self.d_weights / self.D_padded))
         
         # For each block, create B, G, and permutation
         # B: Random diagonal matrix with ±1 entries
@@ -429,18 +637,25 @@ class FastfoodProjection(ParameterSharing):
         """
         z = self._to_tensor(z)
         
+        if self.train_biases:
+            # Split z into weight and bias components
+            z_weights = z[:self._d_input]
+            z_biases = z[self._d_input:]
+        else:
+            z_weights = z
+        
         # Initialize output
         output = torch.zeros(self.D_padded, device=self.device)
         
         # Apply Fastfood transform for each block
         for block_idx in range(self.n_blocks):
-            # Get the portion of z for this block
+            # Get the portion of z_weights for this block
             start_idx = block_idx * self.D_padded
-            end_idx = min(start_idx + self.D_padded, self.d)
+            end_idx = min(start_idx + self.D_padded, self.d_weights)
             
             # Pad z_block to D_padded if needed
             z_block = torch.zeros(self.D_padded, device=self.device)
-            z_block[:end_idx - start_idx] = z[start_idx:end_idx]
+            z_block[:end_idx - start_idx] = z_weights[start_idx:end_idx]
             
             # Get block-specific matrices
             B = getattr(self, f'B_{block_idx}')
@@ -467,11 +682,19 @@ class FastfoodProjection(ParameterSharing):
             output += x
         
         # Scale and truncate to original dimension
-        output = output[:self.D_original] * self.scaling * self.alpha
+        output = output[:self.D_original] * self.scaling
         
-        # Process and add to base parameters
-        output = self.process(output)
-        return self.theta_base + output
+        if self.train_biases:
+            # Create full delta vector
+            delta = torch.zeros(self.D, device=self.device)
+            delta[self.weight_indices] = output
+            delta[self.bias_indices] = z_biases
+            
+            # Apply scaling and add to base
+            return self.theta_base + self.alpha * delta
+        else:
+            # Process will map to full space and add to base parameters
+            return self.process(output)
 
 
 class MLPSoftSharing(ParameterSharing):
@@ -690,20 +913,30 @@ class HyperNetworkSoftSharing(ParameterSharing):
 
 
 class SparseProjection(ParameterSharing):
-    """Sparse random projection: P is D x d sparse matrix with density 'sparsity'.
+    """Sparse random projection: P is sparse matrix with density 'sparsity'.
     Non-zeros ~ N(0,1), then columns normalized to unit length.
-    Input: theta_d (batch, d) or (d,), Output: delta_theta_D (batch, D) or (D,).
-    Full params: theta_0 + output.
+    Projection applied only to weight parameters, biases use 1:1 mapping if train_biases=True.
     """
     def __init__(self, model: torch.nn.Module, d: int, 
-                 sparsity: float = 0.1, alpha: float = 1.0, device: str = 'cuda', seed: int = 0):
-        super().__init__(model, d, alpha, device, seed)
+                 sparsity: float = 0.1, alpha: float = 1.0, device: str = 'cuda', seed: int = 0, train_biases: bool = True):
+        self._d_input = d
+        super().__init__(model, d, alpha, device, seed, train_biases)
         self.sparsity = sparsity
         
+        # Extract weight/bias info if train_biases=True
+        if self.train_biases:
+            self._extract_weight_bias_info()
+            # Update latent dimension: d for weights + num_biases for 1:1 mapping
+            self.d = self._d_input + self.num_biases
+        
+        # Projection matrix is always for weights only
+        proj_size = self.num_weights if self.train_biases else self.N
+        latent_dim = self._d_input if self.train_biases else self.d
+        
         # Generate indices for non-zeros: random positions with seed
-        num_nz = int(self.D * self.d * self.sparsity)
-        row_idx = torch.randint(0, self.D, (num_nz,), device=device)
-        col_idx = torch.randint(0, self.d, (num_nz,), device=device)
+        num_nz = int(proj_size * latent_dim * self.sparsity)
+        row_idx = torch.randint(0, proj_size, (num_nz,), device=device)
+        col_idx = torch.randint(0, latent_dim, (num_nz,), device=device)
         
         # Values: N(0,1)
         values = torch.randn(num_nz, device=device)
@@ -711,7 +944,7 @@ class SparseProjection(ParameterSharing):
         # Sparse tensor in COO
         P_coo = torch.sparse_coo_tensor(
             torch.stack([row_idx, col_idx]), values,
-            size=(self.D, self.d), device=device
+            size=(proj_size, latent_dim), device=device
         )
         
         # Convert to dense temporarily for column normalization
@@ -727,16 +960,36 @@ class SparseProjection(ParameterSharing):
         
         Args:
             z: Latent vector of shape (d,)
+               If train_biases=True: z = [z_weights (d_input), z_biases (num_biases)]
+               If train_biases=False: z = [z_weights (d)]
             
         Returns:
-            Full parameter tensor of shape (D,) computed as theta_base + P @ z
+            Full parameter tensor of shape (D,)
         """
         z = self._to_tensor(z)
-        # Convert to dense for matmul (tradeoff)
-        P_dense = self.P.to_dense()
-        x = P_dense @ z
-        x = self.process(x)
-        return self.theta_base + x
+        
+        if self.train_biases:
+            # Split z into weight and bias components
+            z_weights = z[:self._d_input]
+            z_biases = z[self._d_input:]
+            
+            # Convert to dense for matmul
+            P_dense = self.P.to_dense()
+            delta_weights = P_dense @ z_weights
+            
+            # Create full delta vector
+            delta = torch.zeros(self.D, device=self.device)
+            delta[self.weight_indices] = delta_weights
+            delta[self.bias_indices] = z_biases
+            
+            # Apply scaling and add to base
+            return self.theta_base + self.alpha * delta
+        else:
+            # Convert to dense for matmul
+            P_dense = self.P.to_dense()
+            x = P_dense @ z  # Shape: (N,)
+            # process() will map to full space and add to theta_base
+            return self.process(x)
 
 
 
@@ -753,8 +1006,8 @@ class HardWeightSharing(ParameterSharing):
     
     def __init__(self, model: torch.nn.Module, d: int, seed: int = 0,
                  alpha: float = 1.0, device: str = 'cuda', 
-                 assignment_strategy: str = 'random') -> None:
-        super().__init__(model, d, alpha, device, seed)
+                 assignment_strategy: str = 'random', train_biases: bool = True) -> None:
+        super().__init__(model, d, alpha, device, seed, train_biases)
         self.assignment_strategy = assignment_strategy
         
         self.initialize()
@@ -790,8 +1043,9 @@ class HardWeightSharing(ParameterSharing):
         
         # Use the input z as the blocks values and look up based on assignments
         x = z[self.assignments]
-        x = self.process(x)
-        return self.theta_base + x
+        # Hard weight sharing already produces full D-dimensional output
+        # Just apply alpha scaling directly
+        return self.theta_base + self.alpha * x
     
     def count_block_sizes(self) -> torch.Tensor:
         """Return how many parameters are assigned to each block."""
@@ -831,9 +1085,9 @@ class LayerwiseHardWeightSharing(ParameterSharing):
     
     def __init__(self, model: torch.nn.Module, d: int, seed: int = 0,
                  alpha: float = 1.0, device: str = 'cuda', 
-                 assignment_strategy: str = 'random') -> None:
+                 assignment_strategy: str = 'random', train_biases: bool = True) -> None:
 
-        super().__init__(model, d, alpha, device, seed)
+        super().__init__(model, d, alpha, device, seed, train_biases)
         
         self.k = d  # Blocks per layer
         self.assignment_strategy = assignment_strategy
@@ -1011,8 +1265,9 @@ class LayerwiseHardWeightSharing(ParameterSharing):
         
         # Use the input z as the blocks values and look up based on assignments
         x = z[self.assignments]
-        x = self.process(x)
-        return self.theta_base + x
+        # Hard weight sharing already produces full D-dimensional output
+        # Just apply alpha scaling directly
+        return self.theta_base + self.alpha * x
     
     def count_block_sizes(self) -> dict:
         """Return how many parameters are assigned to each block, organized by layer."""
@@ -1110,9 +1365,9 @@ class LayerwiseHardWeightSharingV2(ParameterSharing):
     
     def __init__(self, model: torch.nn.Module, d: int, seed: int = 0,
                  alpha: float = 1.0, device: str = 'cuda', 
-                 assignment_strategy: str = 'random') -> None:
+                 assignment_strategy: str = 'random', train_biases: bool = True) -> None:
 
-        super().__init__(model, d, alpha, device, seed)
+        super().__init__(model, d, alpha, device, seed, train_biases)
         
         self.k = d  # Blocks per layer
         self.assignment_strategy = assignment_strategy
@@ -1414,8 +1669,9 @@ class LayerwiseHardWeightSharingV2(ParameterSharing):
         
         # Use the input z as the blocks values and look up based on assignments
         x = z[self.assignments]
-        x = self.process(x)
-        return self.theta_base + x
+        # Hard weight sharing already produces full D-dimensional output
+        # Just apply alpha scaling directly
+        return self.theta_base + self.alpha * x
     
     def count_block_sizes(self) -> dict:
         """Return how many parameters are assigned to each block, organized by layer."""
@@ -1573,9 +1829,9 @@ class LayerwiseHardWeightSharingV3(ParameterSharing):
     
     def __init__(self, model: torch.nn.Module, d: int, seed: int = 0,
                  alpha: float = 1.0, device: str = 'cuda', 
-                 assignment_strategy: str = 'random') -> None:
+                 assignment_strategy: str = 'random', train_biases: bool = True) -> None:
 
-        super().__init__(model, d, alpha, device, seed)
+        super().__init__(model, d, alpha, device, seed, train_biases)
         
         self.k = d  # Blocks per weight layer
         self.assignment_strategy = assignment_strategy
@@ -1759,8 +2015,9 @@ class LayerwiseHardWeightSharingV3(ParameterSharing):
         
         # Use the input z as the blocks values and look up based on assignments
         x = z[self.assignments]
-        x = self.process(x)
-        return self.theta_base + x
+        # Hard weight sharing already produces full D-dimensional output
+        # Just apply alpha scaling directly
+        return self.theta_base + self.alpha * x
     
     def count_block_sizes(self) -> dict:
         """Return how many parameters are assigned to each block, organized by layer."""
@@ -2691,7 +2948,7 @@ class LayerwiseRandomProjection(ParameterSharing):
     
     def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0, 
                  normalize: bool = False, device: str = 'cuda', seed: int = 0,
-                 d_strategy: str = 'uniform') -> None:
+                 d_strategy: str = 'uniform', train_biases: bool = True) -> None:
         
         # Store d_strategy before calling super().__init__
         self.d_strategy = d_strategy
@@ -2699,7 +2956,7 @@ class LayerwiseRandomProjection(ParameterSharing):
         self._d_input = d  # Store the input d before it gets overridden
         
         # Initialize base class (will set self.d to the input d temporarily)
-        super().__init__(model, d, alpha, device, seed)
+        super().__init__(model, d, alpha, device, seed, train_biases)
         
         # Extract layer information (separating weights and biases)
         self._extract_layer_info()
@@ -2756,17 +3013,18 @@ class LayerwiseRandomProjection(ParameterSharing):
         """Calculate latent dimensions for each weight layer based on strategy."""
         if self.d_strategy == 'uniform':
             # Each weight layer gets the same latent dimension d
-            # Total latent dimension = num_weight_layers * d + total_bias_size
+            # Total latent dimension = num_weight_layers * d + (total_bias_size if train_biases else 0)
             d_per_layer = self._d_input
             self.weight_latent_dims = [d_per_layer] * self.num_weight_layers
             
         elif self.d_strategy == 'proportional':
             # Distribute d proportionally to layer sizes
             # d_i = floor((D_i / sum(D_j)) * d_total_for_weights)
-            # where d_total_for_weights = d - total_bias_size
+            # where d_total_for_weights = d - (total_bias_size if train_biases else 0)
             
             total_weight_params = sum(self.weight_sizes)
-            d_total_for_weights = max(1, self._d_input - self.total_bias_size)
+            bias_contribution = self.total_bias_size if self.train_biases else 0
+            d_total_for_weights = max(1, self._d_input - bias_contribution)
             
             self.weight_latent_dims = []
             allocated_d = 0
@@ -2786,7 +3044,9 @@ class LayerwiseRandomProjection(ParameterSharing):
             raise ValueError(f"Unknown d_strategy: {self.d_strategy}")
         
         # Calculate total latent dimension
-        self.d = sum(self.weight_latent_dims) + self.total_bias_size
+        # If train_biases=False, biases are not part of latent space
+        bias_contribution = self.total_bias_size if self.train_biases else 0
+        self.d = sum(self.weight_latent_dims) + bias_contribution
         
         # Create latent dimension boundaries for easy indexing
         self.weight_latent_offsets = [0]
@@ -2869,17 +3129,19 @@ class LayerwiseRandomProjection(ParameterSharing):
             # Store in output tensor
             theta[start_param:end_param] = theta_i
         
-        # Handle bias parameters (identity mapping)
-        for bias_idx in range(self.num_bias_params):
-            start_param, end_param = self.bias_boundaries[bias_idx]
-            bias_size = end_param - start_param
-            
-            # Extract bias latent (one-to-one mapping)
-            bias_latent_start = self.bias_latent_offset + sum(self.bias_sizes[:bias_idx])
-            bias_latent_end = bias_latent_start + bias_size
-            
-            z_bias = z[bias_latent_start:bias_latent_end]
-            theta[start_param:end_param] = z_bias
+        # Handle bias parameters (identity mapping) - only if train_biases=True
+        if self.train_biases:
+            for bias_idx in range(self.num_bias_params):
+                start_param, end_param = self.bias_boundaries[bias_idx]
+                bias_size = end_param - start_param
+                
+                # Extract bias latent (one-to-one mapping)
+                bias_latent_start = self.bias_latent_offset + sum(self.bias_sizes[:bias_idx])
+                bias_latent_end = bias_latent_start + bias_size
+                
+                z_bias = z[bias_latent_start:bias_latent_end]
+                theta[start_param:end_param] = z_bias
+        # else: biases remain zero in theta, so theta_base values are preserved
         
         # Apply scaling and add to base parameters
         theta = self.process(theta)
@@ -3007,20 +3269,21 @@ class GlobalRandomProjection(ParameterSharing):
     """
 
     def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0,
-                 normalize: bool = False, device: str = 'cuda', seed: int = 0) -> None:
+                 normalize: bool = False, device: str = 'cuda', seed: int = 0, train_biases: bool = True) -> None:
 
         # Store parameters before calling super().__init__
         self.normalize = normalize
         self._weight_latent_dim = d  # Store the input d for weight latent dimension
 
         # Initialize base class (will set self.d to the input d temporarily)
-        super().__init__(model, d, alpha, device, seed)
+        super().__init__(model, d, alpha, device, seed, train_biases)
 
         # Extract layer information (separating weights and biases)
         self._extract_layer_info()
 
-        # Calculate actual latent dimension: d (for weights) + total_bias_size (for biases)
-        self.d = self._weight_latent_dim + self.total_bias_size
+        # Calculate actual latent dimension: d (for weights) + (total_bias_size if train_biases else 0)
+        bias_contribution = self.total_bias_size if self.train_biases else 0
+        self.d = self._weight_latent_dim + bias_contribution
 
         # Initialize projection matrix for weights
         self.initialize()
@@ -3110,8 +3373,7 @@ class GlobalRandomProjection(ParameterSharing):
 
         # Split latent vector
         z_weights = z[:self._weight_latent_dim]  # Shape: (d,)
-        z_biases = z[self._weight_latent_dim:]   # Shape: (total_bias_size,)
-
+        
         # Initialize output tensor
         theta = torch.zeros(self.D, device=self.device)
 
@@ -3127,14 +3389,17 @@ class GlobalRandomProjection(ParameterSharing):
             theta[start_param:end_param] = theta_weights[weight_idx:weight_idx + layer_size]
             weight_idx += layer_size
 
-        # Handle bias parameters (identity mapping)
-        bias_offset = 0
-        for bias_idx in range(self.num_bias_params):
-            start_param, end_param = self.bias_boundaries[bias_idx]
-            bias_size = self.bias_sizes[bias_idx]
+        # Handle bias parameters (identity mapping) - only if train_biases=True
+        if self.train_biases:
+            z_biases = z[self._weight_latent_dim:]   # Shape: (total_bias_size,)
+            bias_offset = 0
+            for bias_idx in range(self.num_bias_params):
+                start_param, end_param = self.bias_boundaries[bias_idx]
+                bias_size = self.bias_sizes[bias_idx]
 
-            theta[start_param:end_param] = z_biases[bias_offset:bias_offset + bias_size]
-            bias_offset += bias_size
+                theta[start_param:end_param] = z_biases[bias_offset:bias_offset + bias_size]
+                bias_offset += bias_size
+        # else: biases remain zero in theta, so theta_base values are preserved
 
         # Apply scaling and add to base parameters
         theta = self.process(theta)
@@ -3257,12 +3522,12 @@ class LoRAParameterSharing(ParameterSharing):
         train_biases: Whether to include biases in the latent space (default: False)
     """
 
-    def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0,
+    def __init__(self, model: torch.nn.Module, rank: int, alpha: float = 1.0,
                  device: str = 'cuda', seed: int = 0, train_biases: bool = False) -> None:
 
-        super().__init__(model, d, alpha, device, seed)
+        super().__init__(model, rank, alpha, device, seed)
 
-        self.rank = d  # LoRA rank
+        self.rank = rank  # LoRA rank
         self.train_biases = train_biases  # Whether to include biases in latent space
         self._extract_layer_info()
         self.initialize()
@@ -3494,7 +3759,7 @@ class LoRAParameterSharing(ParameterSharing):
         return info
 
 
-def create_weight_sharing(model, args, optimizer_type=None):
+def create_weight_sharing(model, args):
     """
     Create a weight sharing instance based on the provided arguments.
     
@@ -3509,89 +3774,103 @@ def create_weight_sharing(model, args, optimizer_type=None):
     
     param_sharing_type = args.ws.lower()
     seed = args.seed if args.seed is not None else 0
+    train_biases = getattr(args, 'train_biases', False)  # Default to False if not specified
+    if train_biases:
+        print("Training biases in optimization dimensions")
+    else:
+        print("Freezing biases")
     
     if param_sharing_type == 'block':
         ws = HardWeightSharing(
             model=model, 
-            d=args.d, 
+            d=args.id, 
             seed=seed, 
-            device=args.ws_device
+            device=args.ws_device,
+            train_biases=train_biases
         )
     elif param_sharing_type == 'lwb-hard':
         ws = LayerwiseHardWeightSharing(
             model=model, 
-            d=args.d, 
+            d=args.id, 
             seed=seed, 
-            device=args.ws_device
+            device=args.ws_device,
+            train_biases=train_biases
         )
     elif param_sharing_type == 'lwb-v2':
         ws = LayerwiseHardWeightSharingV2(
             model=model, 
-            d=args.d, 
+            d=args.id, 
             seed=seed, 
-            device=args.ws_device
+            device=args.ws_device,
+            train_biases=train_biases
         )
     elif param_sharing_type == 'lwb-v3':
         ws = LayerwiseHardWeightSharingV3(
             model=model, 
-            d=args.d, 
+            d=args.id, 
             seed=seed, 
-            device=args.ws_device
+            device=args.ws_device,
+            train_biases=train_biases
         )
-    elif param_sharing_type == 'randproj':
+    elif param_sharing_type == 'dense':
         normalize = args.normalize_projection
         ws = RandomProjectionSoftSharing(
             model=model, 
-            d=args.d, 
+            d=args.id, 
             alpha=args.alpha, 
             normalize=normalize, 
             seed=seed,
-            device=args.ws_device
+            device=args.ws_device,
+            train_biases=train_biases
         )
     elif param_sharing_type == 'lwdp': # layer-wise random projection with proportional distribution
         normalize = getattr(args, 'normalize_projection', False)
         d_strategy = getattr(args, 'd_strategy', 'uniform')
         ws = LayerwiseRandomProjection(
             model=model,
-            d=args.d,
+            d=args.id,
             alpha=args.alpha,
             normalize=normalize,
             d_strategy=d_strategy,
             seed=seed,
-            device=args.ws_device
+            device=args.ws_device,
+            train_biases=train_biases
         )
     elif param_sharing_type == 'dp2': # global random projection (single P for all weights)
         normalize = getattr(args, 'normalize_projection', False)
         ws = GlobalRandomProjection(
             model=model,
-            d=args.d,
+            d=args.id,
             alpha=args.alpha,
             normalize=normalize,
             seed=seed,
-            device=args.ws_device
+            device=args.ws_device,
+            train_biases=train_biases
         )
-    elif param_sharing_type == 'sp':
+    elif param_sharing_type == 'sparse':
         ws = SparseProjection(
             model=model, 
-            d=args.d, 
+            d=args.id, 
             alpha=args.alpha, 
             seed=seed,
-            device=args.ws_device
+            device=args.ws_device,
+            train_biases=train_biases
         )
     elif param_sharing_type == 'fastfood':
         ws = FastfoodProjection(
             model=model,
-            d=args.d,
+            d=args.id,
             alpha=args.alpha,
             seed=seed,
-            device=args.ws_device
+            device=args.ws_device,
+            train_biases=train_biases
         )
     elif param_sharing_type == 'mlp':
         hidden_dims = [int(dim) for dim in args.hidden_dims.split(',')]
         activation = args.activation.lower() if args.activation else None
         ws = MLPSoftSharing(
             model=model, 
-            d=args.d, 
+            d=args.id, 
             hidden_dims=hidden_dims, 
             use_activation=args.use_activation, 
             activation=activation, 
@@ -3602,7 +3881,7 @@ def create_weight_sharing(model, args, optimizer_type=None):
     elif param_sharing_type == 'hypernetwork':
         ws = HyperNetworkSoftSharing(
             model=model, 
-            d=args.d, 
+            d=args.id, 
             alpha=args.alpha, 
             seed=seed,
             device=args.ws_device
@@ -3610,16 +3889,17 @@ def create_weight_sharing(model, args, optimizer_type=None):
     elif param_sharing_type == 'rff':
         ws = RandomFourierFeaturesSoftSharing(
             model=model,
-            d=args.d,
+            d=args.id,
             alpha=args.alpha,
             seed=seed,
-            device=args.ws_device
+            device=args.ws_device,
+            train_biases=train_biases
         )
     elif param_sharing_type == 'lora':
         train_biases = getattr(args, 'train_biases', False)  # Default to False if not specified
         ws = LoRAParameterSharing(
             model=model,
-            d=args.lora_rank,
+            rank=args.lora_rank,
             alpha=args.alpha,
             seed=seed,
             device=args.ws_device,

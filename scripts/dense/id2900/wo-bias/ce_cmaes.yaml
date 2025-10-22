@@ -8,14 +8,14 @@ commands:
       --dataset cifar10
       --sampler random
       --arch lenet
-      --d 2900
+      --id 2900
       --popsize 32
       --epochs 200
       --optimizer CMA_ES
-      --es_std 0.1
+      --es_std 0.01
       --bus none
       --criterion ce
-      --ws fastfood
+      --ws dense
       --wd 5e-4
 
   - name: "d=2900"
@@ -24,14 +24,14 @@ commands:
       --dataset cifar10
       --sampler random
       --arch lenet
-      --d 2900
+      --id 2900
       --popsize 32
       --epochs 200
       --optimizer CMA_ES
-      --es_std 0.1
+      --es_std 0.01
       --bus none
       --criterion ce
-      --ws fastfood
+      --ws dense
       --wd 5e-4
 
   - name: "d=2900"
@@ -40,12 +40,12 @@ commands:
       --dataset cifar10
       --sampler random
       --arch lenet
-      --d 2900
+      --id 2900
       --popsize 32
       --epochs 200
       --optimizer CMA_ES
-      --es_std 0.1
+      --es_std 0.01
       --bus none
       --criterion ce
-      --ws fastfood
+      --ws dense
       --wd 5e-4

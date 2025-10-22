@@ -260,23 +260,22 @@ def main(args):
 
     optimizer_type = STRATEGY_TYPES[args.optimizer.lower()]
     
-    ws = create_weight_sharing(model=model, args=args, optimizer_type=optimizer_type)
+    ws = create_weight_sharing(model=model, args=args)
 
-    d = ws.d
-    args.d = d
+    dimensions = ws.d
     
-    x0 = np.zeros(d)
+    x0 = np.zeros(dimensions)
 
     # Determine which strategy to use and initialize accordingly
     if optimizer_type == 'EA':
         optimizer, optimizer_params = population_based_strategy_init(strategy=args.optimizer, args=args, x0=x0, steps=len(train_loader) * args.epochs)
         # Initialize population state
         if args.pop_init == 'normal':
-            init_population = np.random.normal(x0, args.pop_init_std, size=(args.popsize, d))
+            init_population = np.random.normal(x0, args.pop_init_std, size=(args.popsize, dimensions))
         elif args.pop_init == 'uniform':
-            init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+            init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, dimensions))
         elif args.pop_init == 'zeros':
-            init_population = np.zeros((args.popsize, d))
+            init_population = np.zeros((args.popsize, dimensions))
         else:
             raise ValueError(f"Invalid initial distribution: {args.pop_init}")
         init_population[0] = x0.copy()
@@ -322,7 +321,8 @@ def main(args):
             'seed': args.seed,
             'epochs': args.epochs,
             'inner_steps': args.inner_steps,
-            'dimensions': args.d,
+            'intrinsic_dimensions': args.id,
+            'dimensions': dimensions,
             'popsize': args.popsize,
             'pop_init': args.pop_init,
             'pop_init_bound': args.pop_init_bound,
@@ -354,7 +354,7 @@ def main(args):
         run_name = args.wandb_name if args.wandb_name else f"{timestamp}"
         
         wandb.init(
-            project=f"{args.wandb_project}-{args.dataset}-{args.arch}-v3",
+            project=f"{args.wandb_project}-{args.dataset}-{args.arch}-v4",
             name=run_name,
             config=config,
             tags=[args.arch, args.dataset, args.optimizer, args.ws, args.bus, optimizer_type]
@@ -471,7 +471,7 @@ def main(args):
                     init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
                     optimizer_state = optimizer.init(key=key, population=init_population, fitness=init_fitness, params=optimizer_params)
                 elif optimizer_type == 'ES':  # ES
-                    optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
+                    optimizer_state = optimizer.init(key=key, mean=np.zeros(dimensions), params=optimizer_params)
                     
             elif args.bus.lower() == 'ema':
                 theta_base = theta_base + lr * delta
@@ -501,7 +501,7 @@ def main(args):
                     init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
                     optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
                 elif optimizer_type == 'ES':  # ES
-                    optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
+                    optimizer_state = optimizer.init(key=key, mean=np.zeros(dimensions), params=optimizer_params)
                     
             elif args.bus.lower() == 'ema_with_momentum':
                 velocity = args.momentum * velocity + (1 - args.momentum) * delta
@@ -529,7 +529,7 @@ def main(args):
                     init_fitness = evaluate_population_on_batch(population=init_population, ws=ws, criterion=criterion, batch=next(iter(train_loader)), device=device, weight_decay=args.wd)
                     optimizer_state = optimizer.init(key=key, population=init_population, fitness=np.inf * np.ones(args.popsize), params=optimizer_params)
                 elif optimizer_type == 'ES':  # ES
-                    optimizer_state = optimizer.init(key=key, mean=np.zeros(args.d), params=optimizer_params)
+                    optimizer_state = optimizer.init(key=key, mean=np.zeros(dimensions), params=optimizer_params)
                     
             elif args.bus.lower() == 'ema_with_init_optimizer_state_and_update_mean':
                 theta_base = theta_base + lr * delta
@@ -707,8 +707,8 @@ if __name__ == "__main__":
                        help='Evolutionary optimizer to use (EA: PSO, etc. | ES: CMA_ES, SV_CMA_ES, SimpleES, Open_ES, SV_Open_ES, xNES)', required=True)
     parser.add_argument('--inner_steps', type=int, default=1,
                        help='Number of inner optimization steps per iteration')
-    parser.add_argument('--d', "--dimensions", type=int, default=128,
-                       help='Dimensionality of the search space', required=True)
+    parser.add_argument('--id', "--intrinsic_dimensions", type=int, default=128,
+                       help='Intrinsic dimensionality of the search space', required=True)
     parser.add_argument('--popsize', type=int, default=64,
                        help='Population size for evolutionary strategy')
     parser.add_argument('--pop_init', type=str, default=None,
@@ -737,7 +737,7 @@ if __name__ == "__main__":
     parser.add_argument('--es_lr', type=float, default=None,
                        help='Learning rate for ES optimizer')
     parser.add_argument('--es_optimizer', type=str, default=None,
-                       choices=['sgd', 'adam', 'none'],
+                       choices=['sgd', 'adam', 'adamw', 'none'],
                        help='Mean (mu) vector optimizer (updater) in ES optimizer')
     
     # ============================================================================
@@ -765,7 +765,7 @@ if __name__ == "__main__":
     parser.add_argument('--ws_device', type=str, default='cuda', choices=['cuda', 'cpu'],
                        help='Device for weight sharing computations')
     parser.add_argument('--train_biases', action='store_true',
-                       help='Train bias parameters in LoRA (default: False, biases frozen at base values)')
+                       help='Include bias parameters in optimization dimensions (default: True, biases included in optimization)')
     
     # ============================================================================
     # Logging and Output Configuration

@@ -8,13 +8,13 @@ commands:
       --dataset cifar10
       --sampler random
       --arch lenet
-      --d 2900
+      --id 2900
       --popsize 32
       --epochs 200
       --optimizer Open_ES
       --es_std 0.01
-      --es_optimizer sgd
-      --es_lr 0.1
+      --es_optimizer adamw
+      --es_lr 0.001
       --bus none
       --criterion ce
       --ws block
@@ -27,12 +27,12 @@ commands:
       --sampler random
       --arch lenet
       --optimizer Open_ES
-      --d 2900
+      --id 2900
       --popsize 32
       --epochs 200
       --es_std 0.01
-      --es_optimizer sgd
-      --es_lr 0.1
+      --es_optimizer adamw
+      --es_lr 0.001
       --bus none
       --criterion ce
       --ws block
@@ -45,12 +45,12 @@ commands:
       --sampler random
       --arch lenet
       --optimizer Open_ES
-      --d 2900
+      --id 2900
       --popsize 32
       --epochs 200
       --es_std 0.01
-      --es_optimizer sgd
-      --es_lr 0.1
+      --es_optimizer adamw
+      --es_lr 0.001
       --bus none
       --criterion ce
       --ws block
