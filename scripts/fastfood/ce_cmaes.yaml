@@ -1,99 +1,68 @@
-description: "LoRA Parameter Sharing with CMA-ES"
+description: "Fastfood Projection with CMA-ES"
 default_timeout: null
 stop_on_error: true
 commands:
-  - name: "Run 1"
+  - name: "d=128"
     command: >-
       python evo_trainer.py
       --dataset cifar10
       --sampler random
       --arch lenet
       --optimizer CMA_ES
-      --d 8
-      --popsize 32
-      --epochs 200
-      --es_std 1.0
-      --bus none
-      --criterion ce
-      --ws lora
-      --wd 5e-4
-
-  - name: "Run 2"
-    command: >-
-      python evo_trainer.py
-      --dataset cifar10
-      --sampler random
-      --arch lenet
-      --optimizer CMA_ES
-      --d 2
+      --d 128
       --popsize 32
       --epochs 200
       --es_std 0.1
       --bus none
       --criterion ce
-      --ws lora
+      --ws fastfood
       --wd 5e-4
 
-  - name: "Run 3"
+  - name: "d=256"
     command: >-
       python evo_trainer.py
       --dataset cifar10
       --sampler random
       --arch lenet
       --optimizer CMA_ES
-      --d 2
+      --d 256
       --popsize 32
       --epochs 200
       --es_std 0.1
       --bus none
       --criterion ce
-      --ws lora
+      --ws fastfood
       --wd 5e-4
 
-  - name: "Run 4"
+  - name: "d=512"
     command: >-
       python evo_trainer.py
       --dataset cifar10
       --sampler random
       --arch lenet
       --optimizer CMA_ES
-      --d 4
+      --d 512
       --popsize 32
       --epochs 200
       --es_std 0.1
       --bus none
       --criterion ce
-      --ws lora
+      --ws fastfood
       --wd 5e-4
 
-  - name: "Run 5"
+  - name: "d=1024"
     command: >-
       python evo_trainer.py
       --dataset cifar10
       --sampler random
       --arch lenet
       --optimizer CMA_ES
-      --d 4
+      --d 1024
       --popsize 32
       --epochs 200
       --es_std 0.1
       --bus none
       --criterion ce
-      --ws lora
+      --ws fastfood
       --wd 5e-4
 
-  - name: "Run 6"
-    command: >-
-      python evo_trainer.py
-      --dataset cifar10
-      --sampler random
-      --arch lenet
-      --optimizer CMA_ES
-      --d 4
-      --popsize 32
-      --epochs 200
-      --es_std 0.1
-      --bus none
-      --criterion ce
-      --ws lora
-      --wd 5e-4

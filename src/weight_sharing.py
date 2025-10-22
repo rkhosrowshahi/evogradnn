@@ -289,6 +289,191 @@ class RandomFourierFeaturesSoftSharing(ParameterSharing):
         return self.theta_base + x
 
 
+class FastfoodProjection(ParameterSharing):
+    """
+    Parameter sharing using Fastfood transform - an efficient structured random projection.
+    
+    This class implements the Fastfood transform from Le et al. (2013) which provides
+    fast and memory-efficient random projections using the Fast Walsh-Hadamard Transform.
+    
+    The mapping is: theta = theta_base + alpha * M @ z
+    where M = H @ G @ Π @ B @ H is factored into:
+    - H: Hadamard transform (via Fast Walsh-Hadamard Transform)
+    - G: Random diagonal matrix with standard normal entries
+    - Π: Random permutation
+    - B: Random diagonal matrix with random ±1 entries
+    
+    Computational complexity: O(D log D) instead of O(D*d) for dense projections
+    Memory complexity: O(D) instead of O(D*d)
+    
+    Note: D is automatically padded to the next power of 2 if needed for FWHT.
+    
+    Input types:
+        - Model: torch.nn.Module
+        - d: int (latent dimension)
+        - alpha: float (scaling factor)
+        
+    Output types:
+        - Full parameter vector: torch.Tensor of shape (D,) where D is the
+          total number of model parameters
+    
+    Reference:
+        Le, Q., Sarlós, T., & Smola, A. (2013). 
+        Fastfood-approximating kernel expansions in loglinear time. ICML 2013.
+    """
+    
+    def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0, 
+                 device: str = 'cuda', seed: int = 0) -> None:
+        """
+        Initialize Fastfood projection.
+        
+        Args:
+            model: PyTorch model
+            d: Latent dimension (number of parameters to optimize)
+            alpha: Scaling factor for the projection
+            device: Device for computations ('cuda' or 'cpu')
+            seed: Random seed for reproducibility
+        """
+        super().__init__(model, d, alpha, device, seed)
+        self.initialize()
+    
+    def initialize(self) -> None:
+        """
+        Initialize Fastfood transform parameters.
+        
+        Creates the fixed random matrices B, G, and permutation Π.
+        Pads D to the next power of 2 if needed for FWHT.
+        """
+        # Store original dimension
+        self.D_original = self.D
+        
+        # Pad D to next power of 2 for Fast Walsh-Hadamard Transform
+        self.D_padded = 2 ** int(np.ceil(np.log2(self.D)))
+        
+        # Number of blocks needed to cover d dimensions
+        # Each block has D_padded dimensions, so we need ceil(d / D_padded) blocks
+        self.n_blocks = int(np.ceil(self.d / self.D_padded))
+        
+        # For each block, create B, G, and permutation
+        # B: Random diagonal matrix with ±1 entries
+        B_list = []
+        G_list = []
+        perm_list = []
+        
+        for i in range(self.n_blocks):
+            # B: Random ±1 diagonal matrix
+            B = torch.randint(0, 2, (self.D_padded,), device=self.device) * 2 - 1
+            B = B.float()
+            B_list.append(B)
+            
+            # G: Random diagonal matrix with standard normal entries
+            G = torch.randn(self.D_padded, device=self.device)
+            G_list.append(G)
+            
+            # Π: Random permutation
+            perm = torch.randperm(self.D_padded, device=self.device)
+            perm_list.append(perm)
+        
+        # Store as buffers (non-trainable)
+        for i, (B, G, perm) in enumerate(zip(B_list, G_list, perm_list)):
+            self.register_buffer(f'B_{i}', B)
+            self.register_buffer(f'G_{i}', G)
+            self.register_buffer(f'perm_{i}', perm)
+        
+        # Store scaling factor for normalization
+        scaling = 1.0 / np.sqrt(self.D_padded)
+        self.register_buffer('scaling', torch.tensor(scaling, device=self.device))
+        
+        print(f"Fastfood initialized: D={self.D_original}, D_padded={self.D_padded}, "
+              f"d={self.d}, n_blocks={self.n_blocks}")
+    
+    def _fwht(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Fast Walsh-Hadamard Transform (vectorized implementation).
+        
+        Computes H @ x in O(D log D) time where H is a Hadamard matrix.
+        
+        Args:
+            x: Input tensor of shape (D,) where D is a power of 2
+            
+        Returns:
+            Transformed tensor of shape (D,)
+        """
+        # Vectorized implementation of Fast Walsh-Hadamard Transform
+        n = x.shape[0]
+        result = x.clone()
+        h = 1
+        
+        while h < n:
+            # Vectorized butterfly operations
+            result = result.reshape(n // (2 * h), 2, h).transpose(0, 1)
+            result = torch.cat([result[0] + result[1], result[0] - result[1]], dim=0)
+            result = result.reshape(n)
+            h *= 2
+        
+        # Normalize by sqrt(n) to maintain variance
+        return result / np.sqrt(n)
+    
+    def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """
+        Apply Fastfood transform to map latent vector to full parameter space.
+        
+        Computes: theta = theta_base + alpha * M @ z
+        where M = H @ G @ Π @ B @ H (applied in blocks)
+        
+        Args:
+            z: Latent vector of shape (d,)
+            
+        Returns:
+            Full parameter tensor of shape (D,)
+        """
+        z = self._to_tensor(z)
+        
+        # Initialize output
+        output = torch.zeros(self.D_padded, device=self.device)
+        
+        # Apply Fastfood transform for each block
+        for block_idx in range(self.n_blocks):
+            # Get the portion of z for this block
+            start_idx = block_idx * self.D_padded
+            end_idx = min(start_idx + self.D_padded, self.d)
+            
+            # Pad z_block to D_padded if needed
+            z_block = torch.zeros(self.D_padded, device=self.device)
+            z_block[:end_idx - start_idx] = z[start_idx:end_idx]
+            
+            # Get block-specific matrices
+            B = getattr(self, f'B_{block_idx}')
+            G = getattr(self, f'G_{block_idx}')
+            perm = getattr(self, f'perm_{block_idx}')
+            
+            # Apply Fastfood transform: H @ G @ Π @ B @ H @ z
+            # Step 1: H @ z_block (First Hadamard transform)
+            x = self._fwht(z_block)
+            
+            # Step 2: B @ x (Element-wise multiplication with ±1 diagonal)
+            x = B * x
+            
+            # Step 3: Π @ x (Permutation)
+            x = x[perm]
+            
+            # Step 4: G @ x (Element-wise multiplication with Gaussian diagonal)
+            x = G * x
+            
+            # Step 5: H @ x (Second Hadamard transform)
+            x = self._fwht(x)
+            
+            # Accumulate to output
+            output += x
+        
+        # Scale and truncate to original dimension
+        output = output[:self.D_original] * self.scaling * self.alpha
+        
+        # Process and add to base parameters
+        output = self.process(output)
+        return self.theta_base + output
+
+
 class MLPSoftSharing(ParameterSharing):
     """
     Parameter sharing using a Multi-Layer Perceptron (MLP) decoder.
@@ -554,94 +739,6 @@ class SparseProjection(ParameterSharing):
         return self.theta_base + x
 
 
-class FWHT(Function):
-    """Fast Walsh-Hadamard Transform (FWHT) as autograd Function.
-    Assumes input length is power of 2. Normalizes by sqrt(length).
-    """
-    @staticmethod
-    def forward(ctx, input):
-        # Convert to numpy for faster computation (20x speedup vs pure torch)
-        length = input.shape[-1]
-        assert np.log2(length).is_integer(), "Length must be power of 2"
-        result = input.detach().numpy()
-        
-        bit = length
-        for _ in range(int(np.log2(length))):
-            bit //= 2
-            for i in range(length):
-                if i & bit == 0:
-                    j = i | bit
-                    temp = result[i]
-                    result[i] += result[j]
-                    result[j] = temp - result[j]
-        
-        result /= np.sqrt(length)
-        ctx.save_for_backward(torch.from_numpy(result).to(input.device))  # Not strictly needed since self-inverse
-        return torch.from_numpy(result).to(input.device)
-    
-    @staticmethod
-    def backward(ctx, grad_output):
-        # Self-inverse: apply same transform
-        return FWHT.forward(ctx, grad_output)
-
-
-class FastfoodProjection(ParameterSharing):
-    """Fastfood random projection: Approximates G x where G ~ N(0, I_d).
-    Input: theta_d (d,), Output: delta_theta_D (D,). D must be power of 2; pad if needed.
-    Full params: theta_0 + output.
-    """
-    def __init__(self, model: torch.nn.Module, d: int, 
-                 alpha: float = 1.0, device: str = 'cuda', seed: int = 0):
-        super().__init__(model, d, alpha, device, seed)
-        assert np.log2(self.D).is_integer(), "Full parameter dimension D must be power of 2"
-        self.fwht = FWHT.apply
-        
-        # Permutation Pi
-        self.register_buffer('perm', torch.randperm(self.D, device=device))
-        
-        # Diagonal B: ±1
-        self.register_buffer('B', torch.sign(torch.rand(self.D, device=device) - 0.5))
-        
-        # Diagonal H: abs ~ N(0,1), random signs (for d slice)
-        h_abs = torch.abs(torch.randn(self.d, device=device))
-        h_sign = torch.sign(torch.rand(self.d, device=device) - 0.5)
-        self.register_buffer('H', h_abs * h_sign)
-        
-        # Scaling factor
-        self.scale = 1.0 / np.sqrt(self.d)
-    
-    def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
-        """
-        Map latent vector to full parameter space using Fastfood projection.
-        
-        Args:
-            z: Latent vector of shape (d,)
-            
-        Returns:
-            Full parameter tensor of shape (D,) computed as theta_base + Fastfood(z)
-        """
-        z = self._to_tensor(z)
-        
-        # Pad z to D dimensions with zeros
-        z_padded = torch.zeros(self.D, device=self.device)
-        z_padded[:self.d] = z * self.H  # Apply H scaling first
-        
-        # Step 1: FWHT on padded input
-        x_fwht = self.fwht(z_padded.unsqueeze(0)).squeeze(0)  # (D,)
-        
-        # Step 2: Permute
-        x_perm = x_fwht[self.perm]
-        
-        # Step 3: Scale by B (elementwise multiply)
-        x_b = x_perm * self.B
-        
-        # Step 4: Inverse FWHT (same as forward)
-        x_inv_fwht = self.fwht(x_b.unsqueeze(0)).squeeze(0)
-        
-        # Step 5: Apply scaling
-        x = x_inv_fwht * self.scale
-        x = self.process(x)
-        return self.theta_base + x
 
 
 class HardWeightSharing(ParameterSharing):
@@ -3135,8 +3232,7 @@ class LoRAParameterSharing(ParameterSharing):
     Low-Rank Adaptation (LoRA) parameter sharing.
 
     This class implements parameter sharing using LoRA (Low-Rank Adaptation) where each
-    weight layer is adapted using low-rank matrices A and B, while biases are kept as
-    separate parameters.
+    weight layer is adapted using low-rank matrices A and B.
 
     For each weight layer W (shape: out_features x in_features):
     - A: matrix of shape (rank x in_features)
@@ -3146,7 +3242,11 @@ class LoRAParameterSharing(ParameterSharing):
 
     The latent vector z consists of:
     - LoRA parameters for all weight layers (flattened A and B matrices)
-    - Bias parameters for all bias layers
+    - Bias parameters for all bias layers (optional, if train_biases=True)
+
+    Bias handling:
+    - If train_biases=True: Biases are included in latent space (identity mapping)
+    - If train_biases=False: Biases are frozen at their base values
 
     Args:
         model: PyTorch model
@@ -3154,24 +3254,31 @@ class LoRAParameterSharing(ParameterSharing):
         alpha: Scaling factor for parameters
         device: Device for computations
         seed: Random seed for initialization
+        train_biases: Whether to include biases in the latent space (default: False)
     """
 
     def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0,
-                 device: str = 'cuda', seed: int = 0) -> None:
+                 device: str = 'cuda', seed: int = 0, train_biases: bool = False) -> None:
 
         super().__init__(model, d, alpha, device, seed)
 
         self.rank = d  # LoRA rank
+        self.train_biases = train_biases  # Whether to include biases in latent space
         self._extract_layer_info()
         self.initialize()
 
         print(f"LoRA Parameter Sharing initialized:")
         print(f"  - LoRA rank: {self.rank}")
+        print(f"  - Train biases: {self.train_biases}")
         print(f"  - Number of weight layers: {self.num_weight_layers}")
-        print(f"  - Number of bias layers: {self.num_bias_params}")
+        print(f"  - Number of bias layers: {self.num_bias_params} ({'trainable' if self.train_biases else 'frozen'})")
+        print(f"  - Weight latent dimension: {self.weight_latent_dim}")
+        if self.train_biases:
+            print(f"  - Bias latent dimension: {self.total_bias_size}")
         print(f"  - Total latent dimension (d): {self.d}")
         print(f"  - Total parameters (D): {self.D}")
         print(f"  - Compression ratio: {self.get_compression_ratio():.2f}")
+        print(f"  - Device: {self.device} (theta_base on: {self.theta_base.device})")
 
     def _extract_layer_info(self) -> None:
         """Extract layer boundaries, separating weights and biases."""
@@ -3229,14 +3336,46 @@ class LoRAParameterSharing(ParameterSharing):
             self.lora_param_sizes.append(lora_size)
             self.lora_param_offsets.append(self.lora_param_offsets[-1] + lora_size)
 
-        # Total latent dimension = sum of LoRA params for weights + bias params
+        # Total latent dimension = sum of LoRA params for weights + (optionally) bias params
         self.weight_latent_dim = sum(self.lora_param_sizes)
-        self.d = self.weight_latent_dim + self.total_bias_size
+        if self.train_biases:
+            self.d = self.weight_latent_dim + self.total_bias_size
+        else:
+            self.d = self.weight_latent_dim
 
     def initialize(self) -> None:
-        """Initialize LoRA parameters."""
-        # Store base parameters (theta_base is already set in parent class)
-        pass
+        """Initialize LoRA parameters and pre-allocate buffers."""
+        # Ensure theta_base is on the correct device
+        self.theta_base = self.theta_base.to(self.device)
+        
+        # Pre-allocate buffer for reconstructed parameters (reused in forward)
+        self.register_buffer('_reconstructed_params', torch.zeros_like(self.theta_base))
+        
+        # Pre-compute slices for faster access
+        self._prepare_slices()
+
+    def _prepare_slices(self) -> None:
+        """Pre-compute slice information to avoid repeated computation."""
+        # Pre-compute A and B sizes for each layer
+        self.a_sizes = []
+        self.b_sizes = []
+        
+        for shape in self.weight_shapes:
+            if len(shape) == 2:  # Linear layer
+                out_features, in_features = shape
+                a_size = self.rank * in_features
+                b_size = out_features * self.rank
+            elif len(shape) == 4:  # Conv layer
+                out_channels, in_channels, kh, kw = shape
+                in_features = in_channels * kh * kw
+                a_size = self.rank * in_features
+                b_size = out_channels * self.rank
+            else:
+                a_size = 0
+                b_size = 0
+            
+            self.a_sizes.append(a_size)
+            self.b_sizes.append(b_size)
 
     def get_compression_ratio(self) -> float:
         """Calculate compression ratio (D/d)."""
@@ -3244,10 +3383,10 @@ class LoRAParameterSharing(ParameterSharing):
 
     def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
         """
-        Map latent vector to full parameter space using LoRA.
+        Map latent vector to full parameter space using LoRA (optimized version).
 
         Args:
-            z: Latent vector of shape (d,) containing LoRA params + bias params
+            z: Latent vector of shape (d,) containing LoRA params + (optionally) bias params
 
         Returns:
             Full parameter tensor of shape (D,)
@@ -3256,17 +3395,17 @@ class LoRAParameterSharing(ParameterSharing):
 
         # Split latent vector into weight LoRA params and bias params
         weight_latent = z[:self.weight_latent_dim]
-        bias_latent = z[self.weight_latent_dim:]
+        if self.train_biases:
+            bias_latent = z[self.weight_latent_dim:]
 
-        # Reconstruct full parameters
-        reconstructed_params = torch.zeros_like(self.theta_base)
+        # Start with base parameters (in-place copy to pre-allocated buffer)
+        self._reconstructed_params.copy_(self.theta_base)
 
         # Process weight layers with LoRA
         weight_latent_idx = 0
         for layer_idx, (start, end) in enumerate(self.weight_boundaries):
             shape = self.weight_shapes[layer_idx]
-            base_weight = self.theta_base[start:end].view(shape)
-
+            
             # Extract LoRA parameters for this layer
             lora_size = self.lora_param_sizes[layer_idx]
             layer_lora_params = weight_latent[weight_latent_idx:weight_latent_idx + lora_size]
@@ -3275,48 +3414,46 @@ class LoRAParameterSharing(ParameterSharing):
             # Reconstruct weight with LoRA adaptation
             if len(shape) == 2:  # Linear layer
                 out_features, in_features = shape
-                # A: (rank, in_features), B: (out_features, rank)
-                a_size = self.rank * in_features
-                a_flat = layer_lora_params[:a_size]
-                b_flat = layer_lora_params[a_size:]
+                # Use pre-computed sizes
+                a_size = self.a_sizes[layer_idx]
+                
+                # Reshape in one go - avoid intermediate variables
+                A = layer_lora_params[:a_size].view(self.rank, in_features)
+                B = layer_lora_params[a_size:].view(out_features, self.rank)
 
-                A = a_flat.view(self.rank, in_features)
-                B = b_flat.view(out_features, self.rank)
-
-                # ΔW = B @ A
-                delta_W = B @ A
+                # ΔW = B @ A, flatten, scale, and add in-place (use mm for better GPU performance)
+                delta_W_flat = torch.mm(B, A).view(-1)
+                self._reconstructed_params[start:end].add_(delta_W_flat, alpha=self.alpha)
 
             elif len(shape) == 4:  # Conv layer
                 out_channels, in_channels, kh, kw = shape
                 in_features = in_channels * kh * kw
+                
+                # Use pre-computed sizes
+                a_size = self.a_sizes[layer_idx]
+                
+                # Reshape A and B
+                A = layer_lora_params[:a_size].view(self.rank, in_features)
+                B = layer_lora_params[a_size:].view(out_channels, self.rank)
 
-                # A: (rank, in_features), B: (out_channels, rank)
-                a_size = self.rank * in_features
-                a_flat = layer_lora_params[:a_size]
-                b_flat = layer_lora_params[a_size:]
+                # ΔW = B @ A, flatten directly (use mm for better GPU performance)
+                delta_W_flat = torch.mm(B, A).view(-1)
+                self._reconstructed_params[start:end].add_(delta_W_flat, alpha=self.alpha)
 
-                A = a_flat.view(self.rank, in_features)
-                B = b_flat.view(out_channels, self.rank)
+        # Process bias layers (direct mapping with in-place operations)
+        # Only update biases if train_biases=True, otherwise keep base values
+        if self.train_biases:
+            bias_latent_idx = 0
+            for start, end in self.bias_boundaries:
+                bias_size = end - start
+                # Directly copy and scale biases in-place
+                self._reconstructed_params[start:end].add_(
+                    bias_latent[bias_latent_idx:bias_latent_idx + bias_size], 
+                    alpha=self.alpha
+                )
+                bias_latent_idx += bias_size
 
-                # ΔW = B @ A, then reshape back to conv shape
-                delta_W = (B @ A).view(out_channels, in_channels, kh, kw)
-            else:
-                # Fallback: no LoRA adaptation for unsupported shapes
-                delta_W = torch.zeros_like(base_weight)
-
-            # Apply LoRA adaptation: W = W_base + ΔW
-            adapted_weight = base_weight + self.alpha * delta_W
-            reconstructed_params[start:end] = adapted_weight.view(-1)
-
-        # Process bias layers (direct mapping)
-        bias_latent_idx = 0
-        for bias_idx, (start, end) in enumerate(self.bias_boundaries):
-            bias_size = self.bias_sizes[bias_idx]
-            bias_params = bias_latent[bias_latent_idx:bias_latent_idx + bias_size]
-            reconstructed_params[start:end] = self.alpha * bias_params
-            bias_latent_idx += bias_size
-
-        return reconstructed_params
+        return self._reconstructed_params
 
     def get_layer_info(self) -> dict:
         """Get information about layer organization."""
@@ -3373,7 +3510,7 @@ def create_weight_sharing(model, args, optimizer_type=None):
     param_sharing_type = args.ws.lower()
     seed = args.seed if args.seed is not None else 0
     
-    if param_sharing_type == 'hard':
+    if param_sharing_type == 'block':
         ws = HardWeightSharing(
             model=model, 
             d=args.d, 
@@ -3441,6 +3578,14 @@ def create_weight_sharing(model, args, optimizer_type=None):
             seed=seed,
             device=args.ws_device
         )
+    elif param_sharing_type == 'fastfood':
+        ws = FastfoodProjection(
+            model=model,
+            d=args.d,
+            alpha=args.alpha,
+            seed=seed,
+            device=args.ws_device
+        )
     elif param_sharing_type == 'mlp':
         hidden_dims = [int(dim) for dim in args.hidden_dims.split(',')]
         activation = args.activation.lower() if args.activation else None
@@ -3471,12 +3616,14 @@ def create_weight_sharing(model, args, optimizer_type=None):
             device=args.ws_device
         )
     elif param_sharing_type == 'lora':
+        train_biases = getattr(args, 'train_biases', False)  # Default to False if not specified
         ws = LoRAParameterSharing(
             model=model,
-            d=args.d,
+            d=args.lora_rank,
             alpha=args.alpha,
             seed=seed,
-            device=args.ws_device
+            device=args.ws_device,
+            train_biases=train_biases
         )
     else:
         raise ValueError(f"Unknown weight sharing type: {param_sharing_type}")

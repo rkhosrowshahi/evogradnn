@@ -348,6 +348,7 @@ def main(args):
             'hidden_dims': args.hidden_dims,
             'use_activation': args.use_activation,
             'activation': args.activation,
+            'train_biases': args.train_biases,
             'notes': args.note,
         }
         run_name = args.wandb_name if args.wandb_name else f"{timestamp}"
@@ -744,6 +745,8 @@ if __name__ == "__main__":
     # ============================================================================
     parser.add_argument('--ws', "--weight_sharing", type=str, default='randproj',
                        help='Weight sharing strategy (e.g., randproj, mlp, hard)', required=True)
+    parser.add_argument('--lora_rank', type=int, default=None,
+                       help='LoRA rank for LoRA weight sharing')
     parser.add_argument('--bus', type=str, default='none',
                        help='Base update strategy (BUS) for weight sharing: none, full, ema, ema_with_momentum, ema_with_init_optimizer_state_and_update_mean, or ema_in_es_loop')
     parser.add_argument('--bus_interval', type=int, default=1,
@@ -761,6 +764,8 @@ if __name__ == "__main__":
                        help='Hidden dimensions for MLP soft sharing (comma-separated)')
     parser.add_argument('--ws_device', type=str, default='cuda', choices=['cuda', 'cpu'],
                        help='Device for weight sharing computations')
+    parser.add_argument('--train_biases', action='store_true',
+                       help='Train bias parameters in LoRA (default: False, biases frozen at base values)')
     
     # ============================================================================
     # Logging and Output Configuration
