@@ -1352,7 +1352,8 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             
     if strategy == 'CMA_ES':
         alpha = 1
-        base = 4 + np.floor(3 * np.log(max(1, args.d)))
+        d = len(x0)
+        base = 4 + np.floor(3 * np.log(max(1, d)))
         popsize = max(2, int(np.ceil(alpha * base)))
         args.popsize = popsize
         es = distribution_based_algorithms[strategy](
