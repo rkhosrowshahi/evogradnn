@@ -234,10 +234,14 @@ def main(args):
     else:
         print("Using CPU device")
     
-    key = jax.random.PRNGKey(0)
     if args.seed is not None:
-        key = jax.random.PRNGKey(args.seed)
         set_seed(args.seed)
+    else:
+        # Get the current PyTorch seed value
+        torch_seed = torch.initial_seed()
+        print(f"PyTorch initial seed: {torch_seed}")
+        args.seed = torch_seed
+    key = jax.random.PRNGKey(args.seed)
         
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Create save directory
