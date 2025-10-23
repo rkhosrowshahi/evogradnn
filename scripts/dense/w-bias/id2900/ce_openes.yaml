@@ -17,7 +17,8 @@ commands:
       --es_lr 0.001
       --bus none
       --criterion ce
-      --ws block
+      --ws dense
+      --normalize_projection
       --wd 5e-4
       --train_biases
 
@@ -36,7 +37,8 @@ commands:
       --es_lr 0.001
       --bus none
       --criterion ce
-      --ws block
+      --ws dense
+      --normalize_projection
       --wd 5e-4
       --train_biases
 
@@ -55,7 +57,8 @@ commands:
       --es_lr 0.001
       --bus none
       --criterion ce
-      --ws block
+      --ws dense
+      --normalize_projection
       --wd 5e-4
       --train_biases
 

@@ -249,7 +249,7 @@ class RandomProjectionSoftSharing(ParameterSharing):
           total number of model parameters
     """
     
-    def __init__(self, model: torch.nn.Module, d: int, alpha: float = 1.0, normalize: bool = False, device: str = 'cuda', seed: int = 0, train_biases: bool = True) -> None:
+    def __init__(self, model: torch.nn.Module, id: int, alpha: float = 1.0, normalize: bool = False, device: str = 'cuda', seed: int = 0, train_biases: bool = True) -> None:
         super().__init__(model, id, alpha, device, seed, train_biases)
         self.normalize = normalize
         
@@ -1297,11 +1297,11 @@ class LayerwiseHardWeightSharingV2(ParameterSharing):
         assignment_strategy: How to initialize assignments within each layer ('random', 'uniform')
     """
     
-    def __init__(self, model: torch.nn.Module, d: int, seed: int = 0,
+    def __init__(self, model: torch.nn.Module, id: int, seed: int = 0,
                  alpha: float = 1.0, device: str = 'cuda', 
                  assignment_strategy: str = 'random', train_biases: bool = True) -> None:
 
-        super().__init__(model, d, alpha, device, seed, train_biases)
+        super().__init__(model, id, alpha, device, seed, train_biases)
         
         self.k = d  # Blocks per layer
         self.assignment_strategy = assignment_strategy

@@ -1,4 +1,4 @@
-description: "Fastfood Projection with CMA-ES"
+description: "Fastfood Projection with OpenES"
 default_timeout: null
 stop_on_error: true
 commands:
@@ -11,11 +11,14 @@ commands:
       --id 2900
       --popsize 32
       --epochs 200
-      --optimizer CMA_ES
+      --optimizer Open_ES
       --es_std 0.01
+      --es_optimizer adamw
+      --es_lr 0.001
       --bus none
       --criterion ce
       --ws dense
+      --normalize_projection
       --wd 5e-4
 
   - name: "d=2900"
@@ -24,14 +27,17 @@ commands:
       --dataset cifar10
       --sampler random
       --arch lenet
+      --optimizer Open_ES
       --id 2900
       --popsize 32
       --epochs 200
-      --optimizer CMA_ES
       --es_std 0.01
+      --es_optimizer adamw
+      --es_lr 0.001
       --bus none
       --criterion ce
       --ws dense
+      --normalize_projection
       --wd 5e-4
 
   - name: "d=2900"
@@ -40,12 +46,16 @@ commands:
       --dataset cifar10
       --sampler random
       --arch lenet
+      --optimizer Open_ES
       --id 2900
       --popsize 32
       --epochs 200
-      --optimizer CMA_ES
       --es_std 0.01
+      --es_optimizer adamw
+      --es_lr 0.001
       --bus none
       --criterion ce
       --ws dense
+      --normalize_projection
       --wd 5e-4
+
