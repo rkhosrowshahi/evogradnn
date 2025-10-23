@@ -1366,6 +1366,22 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             std_max=1e3
         )
         es_state = es.init(key=key, mean=x0, params=es_params)
+    elif strategy == 'Sep_CMA_ES':
+        alpha = 1
+        d = len(x0)
+        base = 4 + np.floor(3 * np.log(max(1, d)))
+        popsize = max(2, int(np.ceil(alpha * base)))
+        args.popsize = popsize
+        es = distribution_based_algorithms[strategy](
+            population_size=popsize, 
+            solution=x0,
+        )
+        es_params = es.default_params.replace(
+            std_init=std_init,
+            std_min=1e-6, 
+            std_max=1e3
+        )
+        es_state = es.init(key=key, mean=x0, params=es_params)
     elif strategy == 'SV_CMA_ES':
         es = distribution_based_algorithms[strategy](
             population_size=args.popsize//5, 
@@ -1432,7 +1448,7 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             lr_schedule = optax.cosine_decay_schedule(
                 init_value=args.es_lr,
                 decay_steps=steps,
-                alpha=1e-3,
+                alpha=1e-6,
             )
             optimizer = optax.sgd(learning_rate=lr_schedule)
         elif args.es_optimizer == 'adam':
@@ -1676,6 +1692,7 @@ def population_based_strategy_init(strategy: str, args: argparse.Namespace, x0: 
 
 STRATEGY_TYPES = {
     'cma_es': 'ES',
+    'sep_cma_es': 'ES',
     'sv_cma_es': 'ES',
     'simplees': 'ES',
     'open_es': 'ES',

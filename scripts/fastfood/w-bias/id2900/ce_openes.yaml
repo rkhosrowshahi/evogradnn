@@ -12,14 +12,14 @@ commands:
       --popsize 32
       --epochs 200
       --optimizer Open_ES
-      --es_std 0.01
+      --es_std 0.1
       --es_optimizer sgd
       --es_lr 0.1
       --bus none
       --criterion ce
-      --ws dense
-      --normalize_projection
+      --ws fastfood
       --wd 5e-4
+      --train_biases
 
   - name: "d=2900"
     command: >-
@@ -31,14 +31,14 @@ commands:
       --id 2900
       --popsize 32
       --epochs 200
-      --es_std 0.01
+      --es_std 0.1
       --es_optimizer sgd
       --es_lr 0.1
       --bus none
       --criterion ce
-      --ws dense
-      --normalize_projection
+      --ws fastfood
       --wd 5e-4
+      --train_biases
 
   - name: "d=2900"
     command: >-
@@ -50,12 +50,12 @@ commands:
       --id 2900
       --popsize 32
       --epochs 200
-      --es_std 0.01
+      --es_std 0.1
       --es_optimizer sgd
       --es_lr 0.1
       --bus none
       --criterion ce
-      --ws dense
-      --normalize_projection
+      --ws fastfood
       --wd 5e-4
+      --train_biases
 

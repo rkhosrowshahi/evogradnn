@@ -12,7 +12,7 @@ commands:
       --popsize 32
       --epochs 200
       --optimizer CMA_ES
-      --es_std 0.01
+      --es_std 0.1
       --bus none
       --criterion ce
       --ws dense
@@ -29,7 +29,7 @@ commands:
       --popsize 32
       --epochs 200
       --optimizer CMA_ES
-      --es_std 0.01
+      --es_std 0.1
       --bus none
       --criterion ce
       --ws dense
@@ -46,7 +46,7 @@ commands:
       --popsize 32
       --epochs 200
       --optimizer CMA_ES
-      --es_std 0.01
+      --es_std 0.1
       --bus none
       --criterion ce
       --ws dense

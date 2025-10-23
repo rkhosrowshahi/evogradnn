@@ -564,16 +564,16 @@ class FastfoodProjection(ParameterSharing):
             z_weights = z
         
         # Initialize output
-        output = torch.zeros(self.num_weights, device=self.device)
+        output = torch.zeros(self.num_weights_padded, device=self.device)
         
         # Apply Fastfood transform for each block
         for block_idx in range(self.n_blocks):
             # Get the portion of z_weights for this block
-            start_idx = block_idx * self.D_padded
-            end_idx = min(start_idx + self.D_padded, self.id)
+            start_idx = block_idx * self.num_weights_padded
+            end_idx = min(start_idx + self.num_weights_padded, self.id)
             
             # Pad z_block to D_padded if needed
-            z_block = torch.zeros(self.num_weights, device=self.device)
+            z_block = torch.zeros(self.num_weights_padded, device=self.device)
             z_block[:end_idx - start_idx] = z_weights[start_idx:end_idx]
             
             # Get block-specific matrices
@@ -3746,7 +3746,7 @@ def create_weight_sharing(model, args):
             train_biases=train_biases
         )
     elif param_sharing_type == 'dense':
-        normalize = args.normalize_projection
+        normalize = getattr(args, 'normalize_projection', False)
         ws = RandomProjectionSoftSharing(
             model=model, 
             id=args.id, 
@@ -3792,7 +3792,7 @@ def create_weight_sharing(model, args):
     elif param_sharing_type == 'fastfood':
         ws = FastfoodProjection(
             model=model,
-            d=args.id,
+            id=args.id,
             alpha=args.alpha,
             seed=seed,
             device=args.ws_device,
@@ -3803,7 +3803,7 @@ def create_weight_sharing(model, args):
         activation = args.activation.lower() if args.activation else None
         ws = MLPSoftSharing(
             model=model, 
-            d=args.id, 
+            id=args.id, 
             hidden_dims=hidden_dims, 
             use_activation=args.use_activation, 
             activation=activation, 
