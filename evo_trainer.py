@@ -275,9 +275,12 @@ def main(args):
         optimizer, optimizer_params = population_based_strategy_init(strategy=args.optimizer, args=args, x0=x0, steps=len(train_loader) * args.epochs)
         # Initialize population state
         if args.pop_init == 'normal':
-            init_population = np.random.normal(x0, args.pop_init_std, size=(args.popsize, dimensions))
+            std = getattr(args, 'pop_init_std', 0.1)
+            init_population = np.random.normal(x0, std, size=(args.popsize, dimensions))
         elif args.pop_init == 'uniform':
-            init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, dimensions))
+            bound = getattr(args, 'pop_init_bound', 0.1)
+            lb, ub = -bound, bound
+            init_population = np.random.uniform(lb, ub, size=(args.popsize, dimensions))
         elif args.pop_init == 'zeros':
             init_population = np.zeros((args.popsize, dimensions))
         else:

@@ -912,7 +912,7 @@ class SparseProjection(ParameterSharing):
 
 
 
-class HardWeightSharing(ParameterSharing):
+class BlockSharing(ParameterSharing):
     """
     Args:
         model: PyTorch model
@@ -994,6 +994,269 @@ class HardWeightSharing(ParameterSharing):
     def get_compression_ratio(self) -> float:
         """Return the compression ratio achieved by the blocks."""
         return self.D / self.d
+
+
+class LayerWiseBlockSharing(ParameterSharing):
+    """
+    Layer-wise Block Sharing: Each layer gets blocks proportional to its size.
+    
+    For a neural network with L layers and N total weight parameters, and id = total blocks,
+    we get compression ratio CR = N / id. Instead of global blocking, we allocate blocks
+    to layers proportionally:
+    
+    B_i = round(|L_i| / CR) for layer i with |L_i| weight parameters
+    
+    where sum(B_i) = id (with adjustment to ensure exact equality).
+    
+    Args:
+        model: PyTorch model
+        id: Total number of blocks across all layers
+        alpha: Scaling factor for parameters
+        device: Device for computations
+        assignment_strategy: How to initialize assignments ('random', 'uniform')
+        train_biases: Whether to train bias parameters
+    """
+    
+    def __init__(self, model: torch.nn.Module, id: int, seed: int = 0,
+                 alpha: float = 1.0, device: str = 'cuda', 
+                 assignment_strategy: str = 'random', train_biases: bool = True) -> None:
+        super().__init__(model, id, alpha, device, seed, train_biases)
+        self.assignment_strategy = assignment_strategy
+        self.target_id = id  # Store the target number of blocks
+        
+        # Extract layer information and calculate blocks per layer
+        self._extract_layer_info()
+        
+        # Initialize assignments
+        self.initialize()
+        
+        print(f"\nLayerWiseBlockSharing initialized:")
+        print(f"  - Number of layers: {self.num_layers}")
+        print(f"  - Number of weight parameters: {self.num_weights}")
+        print(f"  - Target total blocks: {self.target_id}")
+        print(f"  - Actual total blocks: {self.id}")
+        print(f"  - Total parameters: {self.D}")
+        print(f"  - Compression ratio: {self.get_compression_ratio():.2f}")
+        print(f"\nLayer-wise block allocation:")
+        self._print_layer_info()
+        print(f"\nBlock usage statistics:")
+        print(self.count_block_sizes())
+    
+    def _extract_layer_info(self) -> None:
+        """
+        Extract layer boundaries and calculate blocks per layer based on compression ratio.
+        
+        For each layer with size |L_i|, allocate B_i = round(|L_i| / CR) blocks
+        where CR = N / id is the compression ratio.
+        """
+        # First pass: collect layer information
+        self.layer_boundaries = []  # List of (start_idx, end_idx) for each layer
+        self.layer_sizes = []  # Number of weight parameters in each layer
+        self.layer_names = []  # Layer names
+        
+        # Only consider weight parameters (not biases/normalization)
+        # offset tracks position in weight-only parameter space
+        weight_offset = 0
+        for name, param in self.model.named_parameters():
+            param_size = param.numel()
+            
+            # Check if this is a weight parameter
+            is_bias = 'bias' in name
+            is_norm = any(norm in name for norm in ['bn', 'batch_norm', 'batchnorm', 'BatchNorm',
+                                                     'ln', 'layer_norm', 'layernorm', 'LayerNorm',
+                                                     'gn', 'group_norm', 'groupnorm', 'GroupNorm',
+                                                     'instance_norm', 'instancenorm', 'InstanceNorm'])
+            
+            if not is_bias and not is_norm:
+                # This is a weight layer
+                start_idx = weight_offset
+                end_idx = weight_offset + param_size
+                self.layer_boundaries.append((start_idx, end_idx))
+                self.layer_sizes.append(param_size)
+                self.layer_names.append(name)
+                weight_offset += param_size
+        
+        self.num_layers = len(self.layer_boundaries)
+        
+        # Calculate compression ratio: CR = N / id
+        # N = total weight parameters, id = target total blocks
+        CR = self.num_weights / self.target_id
+        
+        # Calculate blocks per layer: B_i = round(|L_i| / CR)
+        self.layer_blocks = []
+        total_allocated = 0
+        
+        for layer_size in self.layer_sizes:
+            num_blocks = max(1, round(layer_size / CR))  # At least 1 block per layer
+            self.layer_blocks.append(num_blocks)
+            total_allocated += num_blocks
+        
+        # Adjust to ensure sum(B_i) = id exactly
+        # Distribute the difference proportionally to layer sizes
+        difference = total_allocated - self.target_id
+        
+        if difference != 0:
+            # Find layers to adjust (prefer larger layers)
+            layer_indices_by_size = sorted(range(self.num_layers), 
+                                          key=lambda i: self.layer_sizes[i], 
+                                          reverse=True)
+            
+            # Adjust blocks one at a time
+            adjustment_sign = -1 if difference > 0 else 1
+            adjustments_needed = abs(difference)
+            
+            for i in range(adjustments_needed):
+                layer_idx = layer_indices_by_size[i % self.num_layers]
+                # Make sure we don't go below 1 block
+                if adjustment_sign < 0 and self.layer_blocks[layer_idx] > 1:
+                    self.layer_blocks[layer_idx] += adjustment_sign
+                elif adjustment_sign > 0:
+                    self.layer_blocks[layer_idx] += adjustment_sign
+        
+        # Update id to actual total blocks (should equal target_id after adjustment)
+        self.id = sum(self.layer_blocks)
+        self.d = self.id + self.other_d  # Update total latent dimension
+        
+    def _print_layer_info(self) -> None:
+        """Print detailed information about each layer's block allocation."""
+        for i, (layer_name, layer_size, num_blocks) in enumerate(zip(self.layer_names, 
+                                                                       self.layer_sizes, 
+                                                                       self.layer_blocks)):
+            layer_cr = layer_size / num_blocks
+            print(f"  Layer {i:2d} ({layer_name:10s}): {layer_size:8d} params -> {num_blocks:5d} blocks (CR: {layer_cr:7.2f})")
+    
+    def initialize(self) -> None:
+        """Initialize parameter assignments to layer-specific blocks."""
+        # Initialize assignments for weight parameters only
+        assignments = torch.zeros(self.num_weights, dtype=torch.long, device=self.device)
+        
+        # Calculate cumulative block offsets for each layer
+        block_offsets = [0]
+        for num_blocks in self.layer_blocks:
+            block_offsets.append(block_offsets[-1] + num_blocks)
+        
+        self.block_offsets = torch.tensor(block_offsets, device=self.device)
+        
+        # Assign parameters within each layer to that layer's blocks
+        for layer_idx, (start, end) in enumerate(self.layer_boundaries):
+            layer_size = end - start
+            num_layer_blocks = self.layer_blocks[layer_idx]
+            
+            # Block indices for this layer
+            layer_block_start = block_offsets[layer_idx]
+            layer_block_end = block_offsets[layer_idx + 1]
+            
+            if self.assignment_strategy == 'random':
+                # Random assignment within layer's blocks
+                layer_assignments = torch.randint(
+                    layer_block_start,
+                    layer_block_end,
+                    (layer_size,),
+                    device=self.device
+                )
+            elif self.assignment_strategy == 'uniform':
+                # Uniform distribution across layer's blocks
+                layer_assignments = torch.arange(layer_size, device=self.device) % num_layer_blocks
+                layer_assignments += layer_block_start
+            else:
+                raise ValueError(f"Unknown assignment strategy: {self.assignment_strategy}")
+            
+            assignments[start:end] = layer_assignments
+        
+        # Store assignments as buffer (non-learnable)
+        self.register_buffer('assignments', assignments)
+    
+    def forward(self, z: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        """
+        Map latent vector (blocks) to full parameter space using layer-wise hard assignment.
+        
+        Args:
+            z: Blocks vector of shape (d,) where blocks are organized sequentially by layer.
+               If train_biases=True, first `id` elements are weight blocks, remaining are biases.
+               If train_biases=False, all elements are weight blocks.
+            
+        Returns:
+            Full parameter tensor of shape (D,) where each position gets the value
+            from its assigned block: theta[i] = z[assignments[i]]
+        """
+        z = self._to_tensor(z)
+        
+        # Validate input dimension
+        if z.shape[0] != self.d:
+            raise ValueError(f"Expected latent vector of size {self.d}, got {z.shape[0]}")
+        
+        # Extract weight blocks and bias values
+        if self.train_biases:
+            z_weights = z[:self.id]
+            z_biases = z[self.id:]
+        else:
+            z_weights = z
+        
+        # Map blocks to weight parameters using assignments
+        output = z_weights[self.assignments]
+        
+        if self.train_biases:
+            # Create full delta vector
+            delta = torch.zeros(self.D, device=self.device)
+            delta[self.weight_indices] = output
+            delta[self.bias_indices] = z_biases
+            
+            # Apply scaling and add to base
+            return self.theta_base + self.alpha * delta
+        else:
+            # Process will map to full space and add to base parameters
+            return self.process(output)
+    
+    def count_block_sizes(self) -> dict:
+        """Return how many parameters are assigned to each block, organized by layer."""
+        block_usage = {}
+        
+        for layer_idx, layer_name in enumerate(self.layer_names):
+            num_layer_blocks = self.layer_blocks[layer_idx]
+            layer_start_block = self.block_offsets[layer_idx].item()
+            layer_end_block = self.block_offsets[layer_idx + 1].item()
+            
+            layer_usage = torch.zeros(num_layer_blocks, device=self.device)
+            for local_block_idx in range(num_layer_blocks):
+                global_block_idx = layer_start_block + local_block_idx
+                layer_usage[local_block_idx] = (self.assignments == global_block_idx).sum()
+            
+            block_usage[layer_name] = layer_usage.cpu().numpy()
+        
+        return block_usage
+    
+    def get_compression_ratio(self) -> float:
+        """Return the compression ratio achieved by the blocks."""
+        return self.D / self.d
+    
+    def get_layer_info(self) -> dict:
+        """Return detailed information about layer structure."""
+        info = {
+            'num_layers': self.num_layers,
+            'total_blocks': self.id,
+            'total_parameters': self.D,
+            'compression_ratio': self.get_compression_ratio(),
+            'layers': []
+        }
+        
+        for layer_idx, (start, end) in enumerate(self.layer_boundaries):
+            layer_size = end - start
+            num_layer_blocks = self.layer_blocks[layer_idx]
+            layer_block_start = self.block_offsets[layer_idx].item()
+            layer_block_end = self.block_offsets[layer_idx + 1].item()
+            
+            layer_info = {
+                'layer_idx': layer_idx,
+                'layer_name': self.layer_names[layer_idx],
+                'param_range': (start, end),
+                'param_size': layer_size,
+                'num_blocks': num_layer_blocks,
+                'block_range': (layer_block_start, layer_block_end),
+                'layer_compression_ratio': layer_size / num_layer_blocks
+            }
+            info['layers'].append(layer_info)
+        
+        return info
 
 
 class LayerwiseHardWeightSharing(ParameterSharing):
@@ -3714,7 +3977,15 @@ def create_weight_sharing(model, args):
         print("Freezing biases")
     
     if param_sharing_type == 'block':
-        ws = HardWeightSharing(
+        ws = BlockSharing(
+            model=model, 
+            id=args.id, 
+            seed=seed, 
+            device=args.ws_device,
+            train_biases=train_biases
+        )
+    elif param_sharing_type == 'lw-block':
+        ws = LayerWiseBlockSharing(
             model=model, 
             id=args.id, 
             seed=seed, 
