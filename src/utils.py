@@ -1452,6 +1452,15 @@ def distribution_based_strategy_init(key: jax.random.PRNGKey, strategy: str, x0:
             )
             optimizer = optax.sgd(learning_rate=lr_schedule)
         elif args.es_optimizer == 'adam':
+            print(f"Using Adam optimizer with learning rate: {args.es_lr}")
+            lr_schedule = optax.piecewise_constant_schedule(
+                init_value=args.es_lr,
+                boundaries_and_scales={
+                    int(steps * 0.5): 0.1,  # multiply by 0.1 at step 160
+                    int(steps * 0.8): 0.1,  # multiply by 0.1 again at step 180
+                }
+            )
+            print(f"Piecewise constant schedule with steps {steps} at {int(steps * 0.5)}, {lr_schedule(int(steps * 0.5))} and {int(steps * 0.8)}, {lr_schedule(int(steps * 0.8))}")
             optimizer = optax.adam(learning_rate=lr_schedule)
         elif args.es_optimizer == 'adamw':
             optimizer = optax.adamw(learning_rate=lr_schedule, weight_decay=args.wd)

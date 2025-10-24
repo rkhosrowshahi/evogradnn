@@ -17,7 +17,7 @@ commands:
       --es_lr 0.001
       --bus none
       --criterion ce
-      --ws block
+      --ws lw-block
       --wd 5e-4
       --train_biases
 
@@ -36,7 +36,7 @@ commands:
       --es_lr 0.1
       --bus none
       --criterion ce
-      --ws block
+      --ws lw-block
       --wd 5e-4
       --train_biases
       
@@ -55,6 +55,6 @@ commands:
       --es_lr 0.1
       --bus none
       --criterion ce
-      --ws block
+      --ws lw-block
       --wd 5e-4
       --train_biases
