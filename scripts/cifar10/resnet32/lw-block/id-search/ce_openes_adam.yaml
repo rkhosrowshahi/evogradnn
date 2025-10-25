@@ -8,7 +8,7 @@ commands:
       --dataset cifar10
       --sampler random
       --arch resnet32
-      --id 50000
+      --id 200000
       --popsize 64
       --epochs 200
       --optimizer Open_ES
@@ -47,7 +47,7 @@ commands:
       --sampler random
       --arch resnet32
       --optimizer Open_ES
-      --id 200000
+      --id 50000
       --popsize 64
       --epochs 200
       --es_std 0.01
