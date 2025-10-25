@@ -12,12 +12,12 @@ commands:
       --popsize 64
       --epochs 200
       --optimizer Open_ES
-      --es_std 0.001
+      --es_std 0.01
       --es_optimizer adam
       --es_lr 0.001
       --bus none
       --criterion ce
-      --ws fastfood
+      --ws lw-block
       --wd 5e-4
       --train_biases
 
@@ -31,12 +31,12 @@ commands:
       --id 100000
       --popsize 64
       --epochs 200
-      --es_std 0.001
+      --es_std 0.01
       --es_optimizer adam
       --es_lr 0.001
       --bus none
       --criterion ce
-      --ws fastfood
+      --ws lw-block
       --wd 5e-4
       --train_biases
       
@@ -50,11 +50,11 @@ commands:
       --id 200000
       --popsize 64
       --epochs 200
-      --es_std 0.001
+      --es_std 0.01
       --es_optimizer adam
       --es_lr 0.001
       --bus none
       --criterion ce
-      --ws fastfood
+      --ws lw-block
       --wd 5e-4
       --train_biases
