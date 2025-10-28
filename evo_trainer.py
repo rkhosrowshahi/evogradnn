@@ -69,37 +69,40 @@ def ea_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
             pop_avg_loss_meter.update(np.mean(optimizer_state.fitness))
 
         # Extract signal from ES exploration
-        mean_z = optimizer.get_population(state=optimizer_state).mean(axis=0)
+        # mean_z = optimizer.get_population(state=optimizer_state).mean(axis=0)
+        mean_z = optimizer.get_best_solution(state=optimizer_state)
 
         if args.bus.lower() == 'ema_in_es_loop':
             theta_base = ws.theta_base.clone()
             load_solution_to_model(mean_z, ws, device)
             theta_zt = params_to_vector(ws.model.parameters())
             delta = theta_zt - theta_base
-            lr = args.lr
-            velocity = args.momentum * velocity + (1 - args.momentum) * delta
+            lr = args.bus_lr
+            # velocity = args.momentum * velocity + (1 - args.momentum) * delta
+            velocity = delta
+            theta_base = theta_base + lr * velocity
             theta_base = theta_base + lr * velocity
             ws.set_theta(theta_base)
             # Align ES mean with new base theta without resetting ES state.
             # For linear mappings (randproj/sparseproj): theta = theta_base + alpha * P @ z
             # We compensate base shift Δtheta_base = lr * delta by Δz = - (alpha * P)^+ Δtheta_base
-            try:
-                if hasattr(ws, 'P') and ws.P is not None:
-                    A = ws.alpha * ws.P  # (D, d)
-                    delta_theta_base = (lr * velocity).to(A.device).float()  # (D,)
-                    # Minimal-norm latent shift
-                    pinvA = torch.linalg.pinv(A)  # (d, D)
-                    delta_z_t = -(pinvA @ delta_theta_base)  # (d,)
-                    delta_z_np = delta_z_t.detach().cpu().numpy()
-                    # Update ES mean(s) directly to avoid losing momentum/state
-                    mean_z = np.array(optimizer.get_population(state=optimizer_state).mean(axis=0))
-                    if hasattr(optimizer_state, 'mean'):
-                        optimizer_state = optimizer_state.replace(mean=mean_z + delta_z_np)
-                    elif hasattr(optimizer_state, 'means'):
-                        means_np = np.array(optimizer_state.means)
-                        optimizer_state = optimizer_state.replace(means=means_np + delta_z_np[None, :])
-            except Exception as e:
-                print(f"Skipping Δz mean-translation due to error: {e}")
+            # try:
+            #     if hasattr(ws, 'P') and ws.P is not None:
+            #         A = ws.alpha * ws.P  # (D, d)
+            #         delta_theta_base = (lr * velocity).to(A.device).float()  # (D,)
+            #         # Minimal-norm latent shift
+            #         pinvA = torch.linalg.pinv(A)  # (d, D)
+            #         delta_z_t = -(pinvA @ delta_theta_base)  # (d,)
+            #         delta_z_np = delta_z_t.detach().cpu().numpy()
+            #         # Update ES mean(s) directly to avoid losing momentum/state
+            #         mean_z = np.array(optimizer.get_mean(state=optimizer_state).mean(axis=0))
+            #         if hasattr(optimizer_state, 'mean'):
+            #             optimizer_state = optimizer_state.replace(mean=mean_z + delta_z_np)
+            #         elif hasattr(optimizer_state, 'means'):
+            #             means_np = np.array(optimizer_state.means)
+            #             optimizer_state = optimizer_state.replace(means=means_np + delta_z_np[None, :])
+            # except Exception as e:
+            #     print(f"Skipping Δz mean-translation due to error: {e}")
 
         # Log to wandb
         if (count_batch - 1) % period == 0 or count_batch == num_batches or count_batch == 1 or count_batch == 0:
@@ -173,30 +176,32 @@ def es_train_epoch(optimizer, optimizer_params, optimizer_state, key, ws, criter
             load_solution_to_model(mean_z, ws, device)
             theta_zt = params_to_vector(ws.model.parameters())
             delta = theta_zt - theta_base
-            lr = args.lr
-            velocity = args.momentum * velocity + (1 - args.momentum) * delta
+            lr = args.bus_lr
+            # velocity = args.momentum * velocity + (1 - args.momentum) * delta
+            velocity = delta
+            theta_base = theta_base + lr * velocity
             theta_base = theta_base + lr * velocity
             ws.set_theta(theta_base)
             # Align ES mean with new base theta without resetting ES state.
             # For linear mappings (randproj/sparseproj): theta = theta_base + alpha * P @ z
             # We compensate base shift Δtheta_base = lr * delta by Δz = - (alpha * P)^+ Δtheta_base
-            try:
-                if hasattr(ws, 'P') and ws.P is not None:
-                    A = ws.alpha * ws.P  # (D, d)
-                    delta_theta_base = (lr * velocity).to(A.device).float()  # (D,)
-                    # Minimal-norm latent shift
-                    pinvA = torch.linalg.pinv(A)  # (d, D)
-                    delta_z_t = -(pinvA @ delta_theta_base)  # (d,)
-                    delta_z_np = delta_z_t.detach().cpu().numpy()
-                    # Update ES mean(s) directly to avoid losing momentum/state
-                    mean_z = np.array(optimizer.get_mean(state=optimizer_state).mean(axis=0))
-                    if hasattr(optimizer_state, 'mean'):
-                        optimizer_state = optimizer_state.replace(mean=mean_z + delta_z_np)
-                    elif hasattr(optimizer_state, 'means'):
-                        means_np = np.array(optimizer_state.means)
-                        optimizer_state = optimizer_state.replace(means=means_np + delta_z_np[None, :])
-            except Exception as e:
-                print(f"Skipping Δz mean-translation due to error: {e}")
+            # try:
+            #     if hasattr(ws, 'P') and ws.P is not None:
+            #         A = ws.alpha * ws.P  # (D, d)
+            #         delta_theta_base = (lr * velocity).to(A.device).float()  # (D,)
+            #         # Minimal-norm latent shift
+            #         pinvA = torch.linalg.pinv(A)  # (d, D)
+            #         delta_z_t = -(pinvA @ delta_theta_base)  # (d,)
+            #         delta_z_np = delta_z_t.detach().cpu().numpy()
+            #         # Update ES mean(s) directly to avoid losing momentum/state
+            #         mean_z = np.array(optimizer.get_mean(state=optimizer_state).mean(axis=0))
+            #         if hasattr(optimizer_state, 'mean'):
+            #             optimizer_state = optimizer_state.replace(mean=mean_z + delta_z_np)
+            #         elif hasattr(optimizer_state, 'means'):
+            #             means_np = np.array(optimizer_state.means)
+            #             optimizer_state = optimizer_state.replace(means=means_np + delta_z_np[None, :])
+            # except Exception as e:
+            #     print(f"Skipping Δz mean-translation due to error: {e}")
 
         # Log to wandb
         if (count_batch - 1) % period == 0 or count_batch == num_batches or count_batch == 1 or count_batch == 0:
@@ -293,15 +298,15 @@ def main(args):
         optimizer, optimizer_params, optimizer_state = distribution_based_strategy_init(key=key, strategy=args.optimizer, x0=x0, steps=args.inner_steps * len(train_loader) * args.epochs, args=args)
         train_epoch_fn = es_train_epoch
 
-    if args.lr_scheduler is not None:   
-        if args.lr_scheduler.lower() == 'cosine':
-            scheduler = CosineAnnealingLRScheduler(eta_max=args.lr, eta_min=1e-4, T_max=args.epochs, T_mult=1)
-        elif args.lr_scheduler.lower() == 'step':
-            scheduler = StepLRScheduler(args.lr, args.lr_scheduler_step_size, args.lr_scheduler_gamma)
-        elif args.lr_scheduler.lower() == 'multi_step':
-            scheduler = MultiStepLRScheduler(args.lr, args.lr_scheduler_milestones, args.lr_scheduler_gamma)
-        elif args.lr_scheduler.lower() == 'constant':
-            scheduler = ConstantLRScheduler(args.lr)
+    if args.bus_lr_scheduler is not None:   
+        if args.bus_lr_scheduler.lower() == 'cosine':
+            scheduler = CosineAnnealingLRScheduler(eta_max=args.bus_lr, eta_min=1e-4, T_max=args.epochs, T_mult=1)
+        elif args.bus_lr_scheduler.lower() == 'step':
+            scheduler = StepLRScheduler(args.bus_lr, args.bus_lr_scheduler_step_size, args.bus_lr_scheduler_gamma)
+        elif args.bus_lr_scheduler.lower() == 'multi_step':
+            scheduler = MultiStepLRScheduler(args.bus_lr, args.bus_lr_scheduler_milestones, args.bus_lr_scheduler_gamma)
+        elif args.bus_lr_scheduler.lower() == 'constant':
+            scheduler = ConstantLRScheduler(args.bus_lr)
     else:
         scheduler = None
 
@@ -343,11 +348,11 @@ def main(args):
             'es_std': args.es_std,
             'es_optimizer': args.es_optimizer,
             'es_lr': args.es_lr,
-            'lr': args.lr,
-            'lr_scheduler': args.lr_scheduler,
-            'lr_scheduler_step_size': args.lr_scheduler_step_size,
-            'lr_scheduler_gamma': args.lr_scheduler_gamma,
-            'lr_scheduler_milestones': args.lr_scheduler_milestones,
+            'lr': args.bus_lr,
+            'bus_lr_scheduler': args.bus_lr_scheduler,
+            'bus_lr_scheduler_step_size': args.bus_lr_scheduler_step_size,
+            'bus_lr_scheduler_gamma': args.bus_lr_scheduler_gamma,
+            'bus_lr_scheduler_milestones': args.bus_lr_scheduler_milestones,
             'weight_decay': args.wd,
             'momentum': args.momentum,
             'batch_size': args.batch_size,
@@ -380,13 +385,10 @@ def main(args):
     best_acc, best_loss = 0.0, 0.0
     epoch = 1
     step = 1
-    lr = args.lr
+    lr = args.bus_lr
     while epoch <=  args.epochs:
         if scheduler is not None:
             lr = scheduler.get_lr()
-        if epoch <= 1:
-            lr = 1.0 # warmup
-
         # Use the appropriate train_epoch function based on strategy
         key, optimizer_state, step = train_epoch_fn(optimizer, optimizer_params, optimizer_state, key, 
                                     ws, criterion, 
@@ -469,9 +471,9 @@ def main(args):
                 if optimizer_type == 'EA':
                     # Initialize population state
                     if args.pop_init == 'normal':
-                        init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+                        init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, dimensions))
                     elif args.pop_init == 'uniform':
-                        init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                        init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, dimensions))
                     else:
                         raise ValueError(f"Invalid initial distribution: {args.pop_init}")
                     init_population[0] = x0.copy()
@@ -481,7 +483,9 @@ def main(args):
                     optimizer_state = optimizer.init(key=key, mean=np.zeros(dimensions), params=optimizer_params)
                     
             elif args.bus.lower() == 'ema':
+                
                 theta_base = theta_base + lr * delta
+                print(f"{theta_base[:5]} = {theta_base[:5]} + {lr} * {delta[:5]}")
                 ws.load_to_model(theta_base)
                 (theta_base_test_ce, 
                 theta_base_test_top1, 
@@ -497,11 +501,11 @@ def main(args):
                 if optimizer_type == 'EA':
                     # Initialize population state
                     if args.pop_init == 'normal':
-                        init_population = np.random.normal(x0, args.pop_init_std, size=(args.popsize, d))
+                        init_population = np.random.normal(x0, args.pop_init_std, size=(args.popsize, dimensions))
                     elif args.pop_init == 'uniform':
-                        init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                        init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, dimensions))
                     elif args.pop_init == 'zeros':
-                        init_population = np.zeros((args.popsize, d))
+                        init_population = np.zeros((args.popsize, dimensions))
                     else:
                         raise ValueError(f"Invalid initial distribution: {args.pop_init}")
                     init_population[0] = x0.copy()
@@ -527,9 +531,9 @@ def main(args):
                 if optimizer_type == 'EA':
                     # Initialize population state
                     if args.pop_init == 'normal':
-                        init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+                        init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, dimensions))
                     elif args.pop_init == 'uniform':
-                        init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                        init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, dimensions))
                     else:
                         raise ValueError(f"Invalid initial distribution: {args.pop_init}")
                     init_population[0] = x0.copy()
@@ -565,9 +569,9 @@ def main(args):
                         if optimizer_type == 'EA':
                             # Initialize population state
                             if args.pop_init == 'normal':
-                                init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, d))
+                                init_population = np.random.normal(x0, args.ga_std, size=(args.popsize, dimensions))
                             elif args.pop_init == 'uniform':
-                                init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, d))
+                                init_population = np.random.uniform(-args.pop_init_bound, args.pop_init_bound, size=(args.popsize, dimensions))
                             else:
                                 raise ValueError(f"Invalid initial distribution: {args.pop_init}")
                             init_population[0] = x0.copy()
@@ -691,16 +695,16 @@ if __name__ == "__main__":
     # ============================================================================
     # Optimizer and Learning Rate Configuration
     # ============================================================================
-    parser.add_argument('--lr', "--learning_rate", type=float, default=None,
+    parser.add_argument('--bus_lr', "--learning_rate", type=float, default=None,
                        help='Initial learning rate')
-    parser.add_argument('--lr_scheduler', type=str, default=None, 
+    parser.add_argument('--bus_lr_scheduler', type=str, default=None, 
                        choices=['cosine', 'step', 'multi_step', 'constant'],
                        help='Learning rate scheduler type')
-    parser.add_argument('--lr_scheduler_step_size', type=int, default=None,
+    parser.add_argument('--bus_lr_scheduler_step_size', type=int, default=None,
                        help='Step size for step scheduler')
-    parser.add_argument('--lr_scheduler_gamma', type=float, default=None,
+    parser.add_argument('--bus_lr_scheduler_gamma', type=float, default=None,
                        help='Gamma (decay factor) for step/multi_step schedulers')
-    parser.add_argument('--lr_scheduler_milestones', type=str, default=None,
+    parser.add_argument('--bus_lr_scheduler_milestones', type=str, default=None,
                        help='Milestones for multi_step lr scheduler (comma-separated)')
     parser.add_argument('--wd', "--weight_decay", type=float, default=5e-4,
                        help='Weight decay (L2 regularization) coefficient')
